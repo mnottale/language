@@ -1,0 +1,15 @@
+alpha = { 'a'..'z' | 'A'..'Z' }
+digit = { '0'..'9' }
+operator =  @{ "+" | "-"}
+
+number = @{ (digit)+ }
+ident = @{ alpha ~ (alpha | digit)? }
+
+assign = { ident ~ "=" ~ expr }
+expr = { binary | number | ident | ( "(" ~ expr ~ ")" ) }
+statement = { assign | binary }
+binary = { (unary | ( "(" ~ expr ~ ")" )) ~ operator ~ expr }
+unary = _{ number | ident}
+
+
+whitespace = _{ " " | "\t" | "\r" | "\n" }
