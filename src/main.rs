@@ -1,8 +1,10 @@
 //#![feature(underscore_lifetimes)]
 
+
 extern crate pest;
 #[macro_use]
 extern crate pest_derive;
+
 
 use pest::Parser;
 
@@ -50,13 +52,43 @@ fn process_assign(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput
   *entry = val;
 }
 
+fn process_block(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, mut state: &mut HashMap<String, i32>) {
+  for r in pairs {
+    println!("blockstatement:    {}", r.clone().into_span().as_str());
+    process_statement(r, &mut state)
+  }
+}
+
+fn process_if(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, mut state: &mut HashMap<String, i32>) {
+  let expr = pairs.next().unwrap();
+  /*
+  if process_expr(expr.into_inner(), &mut state) != 0 {
+    loop {
+      let p = pairs.next();
+      match p {
+        Some(s) => process_statement(s, &mut state),
+        None => break,
+      }
+    }
+  }*/
+  
+  let block = pairs.next().unwrap();
+  println!("Block:    {:?}", block.as_rule());
+  println!("Block:    {}", block.clone().into_span().as_str());
+  if process_expr(expr.into_inner(), &mut state) != 0 {
+    process_block(block.into_inner(), &mut state)
+  }
+}
+
+  
 fn process_statement(pair: pest::iterators::Pair<Rule, pest::inputs::StrInput>, mut state: &mut HashMap<String, i32>) {
   for inner_pair in pair.into_inner() {
     //println!("  Rule:    {:?}", inner_pair.as_rule());
     //process_statement(inner_pair, &mut state);
     match inner_pair.as_rule() {
       Rule::assign => process_assign(inner_pair.into_inner(), &mut state),
-      default => {},
+      Rule::IF => process_if(inner_pair.into_inner(), &mut state),
+      default => {println!("Unhandled:    {:?}", default)},
     }
   }
 }
@@ -70,7 +102,7 @@ fn main() {
     stdin.lock().read_line(&mut line).unwrap();
     //println!("Text:    {}", line);
     let sline = line.as_str();
-    let pairs = LParser::parse_str(Rule::statement, sline).unwrap();
+    let pairs = LParser::parse_str(Rule::statement, sline).unwrap_or_else(|e| panic!("{}", e));
     for pair in pairs {
       println!("Rule:    {:?}", pair.as_rule());
       println!("Span:    {:?}", pair.clone().into_span());
