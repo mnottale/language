@@ -7,8 +7,8 @@ ident = @{ alpha ~ (alpha | digit)* }
 
 assign = { ident ~ "=" ~ expr }
 funccall = { ident ~ "(" ~ ")" }
-expr = { binary | number | ident | ( "(" ~ expr ~ ")" ) | funccall }
-statement = { funcdef | assign | binary | IF}
+expr = { funccall | binary | number | ident | ( "(" ~ expr ~ ")" ) }
+statement = { assign | expr | IF}
 binary = { (unary | ( "(" ~ expr ~ ")" )) ~ operator ~ expr }
 unary = _{ number | ident}
 block = { "{" ~ (statement ~ ";")* ~ "}" }
@@ -16,5 +16,8 @@ block = { "{" ~ (statement ~ ";")* ~ "}" }
 funcdef = { "func" ~ ident ~ block}
 
 IF = { "if" ~ expr ~ block }
+
+
+toplevel = { funcdef | funccall | assign}
 
 whitespace = _{ " " | "\t" | "\r" | "\n" }
