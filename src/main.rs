@@ -26,7 +26,103 @@ use std::ops::DerefMut;
 
 lazy_static! {
   static ref variables : Mutex<HashMap<String, i32>> = Mutex::new(HashMap::new());
+  static ref arrays : Mutex<Allocator<Vec<Value>>> = Mutex::new(Allocator::new(Vec::new()));
   //static ref functions : Arc<HashMap<String, Box<Function>>> = Arc::new(HashMap::new());
+}
+
+struct Allocator<T: Clone> {
+  template: T,
+  avail: Vec<Box<T>>,
+  frees: Vec<u32>,
+}
+
+impl<T> Allocator<T> where T: Clone {
+  fn new(template: T) -> Allocator<T> {
+    Allocator::<T> {template: template, avail: Vec::new(), frees: Vec::new()}
+  }
+  fn alloc(&mut self) -> u32 {
+    if self.frees.len() != 0 {
+      let res = self.frees[self.frees.len()-1];
+      self.frees.pop();
+      return res;
+    } else {
+      self.avail.push(Box::new(self.template.clone()));
+      return self.avail.len() as u32;
+    }
+  }
+  fn free(&mut self, idx: u32) {
+    self.avail[idx as usize] = Box::new(self.template.clone());
+    self.frees.push(idx);
+  }
+  fn get(&mut self, idx: u32) -> *mut T {
+    self.avail[idx as usize].deref_mut()
+  }
+}
+
+struct Value {
+  v: u64,
+}
+
+static AMASK:u64 = 0x0000FFFFFFFFFFFF;
+static TMASK:u64 = 0xFFFF000000000000;
+static TSHIFT:i32 = 48;
+
+static T_INT:u64 = 1;
+static T_STR:u64 = 2;
+static T_ARR:u64 = 3;
+
+enum EValue {
+  Int(i32),
+  Str(&'static mut String),
+}
+
+impl Value {
+  fn from_int(val: i32) -> Value {
+    Value{v: (T_INT << TSHIFT) + ((val as u32) as u64)}
+  }
+  fn from_str(val: String) -> Value {
+    let sptr = Box::into_raw(Box::new(val));
+    Value{v: (T_STR << TSHIFT) + (sptr as u64)}
+  }
+  fn vtype(&self) -> u64 {
+    ((self.v &TMASK) >> TSHIFT)
+  }
+  fn as_str(& self) -> &'static mut String {
+    unsafe {
+      &mut*((self.v&AMASK) as *mut String)
+    }
+  }
+  fn as_int(& self) -> i32 {
+    ((self.v & AMASK) as u32) as i32
+  }
+  fn evalue(&mut self) -> EValue {
+    let t = self.vtype();
+    if t == T_INT { return EValue::Int(self.as_int()); }
+    if t == T_STR { return EValue::Str(self.as_str()); }
+    unreachable!()
+  }
+}
+
+impl Drop for Value {
+  fn drop(&mut self) {
+    if self.vtype() == T_STR {
+      unsafe {
+        Box::from_raw( (self.v & AMASK) as *mut String);
+      }
+    }
+  }
+}
+
+impl Clone for Value {
+  fn clone(&self) -> Value {
+    if self.vtype() == T_STR {
+      return Value::from_str(self.as_str().clone());
+    }
+    if self.vtype() == T_INT {
+      return Value{v: self.v};
+    }
+    unreachable!();
+  }
 }
 
 type Functions = HashMap<String, Box<Function>>;
@@ -155,7 +251,7 @@ fn parse_assign(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>,
 fn parse_block(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, ctx: &mut ParseContext) -> Block {
   let mut res = Vec::new();
   for r in pairs {
-    println!("blockstatement:    {}", r.clone().into_span().as_str());
+    //println!("blockstatement:    {}", r.clone().into_span().as_str());
     res.push(Box::new(parse_statement(r, ctx)));
   }
   return Block{statements: res};
@@ -242,7 +338,19 @@ fn exec_expr(e: &Expression, ctx: &mut ExecContext) -> i32 {
   }
 }
 
+fn test_value() {
+  let vi = Value::from_int(-42);
+  let vs = Value::from_str("foo".to_string());
+  println!("vi: {}", vi.as_int());
+  println!("vs: {}", vs.as_str());
+  let vi2 = vi.clone();
+  let vs2 = vs.clone();
+  println!("vi: {}", vi2.as_int());
+  println!("vs: {}", vs2.as_str());
+}
+
 fn main() {
+  test_value();
   let mut state : HashMap<String, i32> = HashMap::new();
   let mut functions = Arc::new(Functions::new());
   let stdin = io::stdin();
