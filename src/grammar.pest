@@ -7,8 +7,11 @@ ident = @{ alpha ~ (alpha | digit)* }
 
 assign = { ident ~ "=" ~ expr }
 funccall = { ident ~ "(" ~ ")" }
+
+vardecl = { "var" ~ ident ~ "=" ~ expr}
+
 expr = { funccall | binary | number | ident | ( "(" ~ expr ~ ")" ) }
-statement = { assign | expr | IF}
+statement = { vardecl | assign | expr | IF}
 binary = { (unary | ( "(" ~ expr ~ ")" )) ~ operator ~ expr }
 unary = _{ number | ident}
 block = { "{" ~ (statement ~ ";")* ~ "}" }
