@@ -5,8 +5,11 @@ operator =  @{ "+" | "-"}
 number = @{ (digit)+ }
 ident = @{ alpha ~ (alpha | digit)* }
 
+exprlist = { expr ? ~ ("," ~ expr)* } 
+identlist = {ident ? ~ ("," ~ ident)*}
 assign = { ident ~ "=" ~ expr }
-funccall = { ident ~ "(" ~ ")" }
+
+funccall = { ident ~ "(" ~ exprlist ~ ")" }
 
 vardecl = { "var" ~ ident ~ "=" ~ expr}
 
@@ -16,7 +19,7 @@ binary = { (unary | ( "(" ~ expr ~ ")" )) ~ operator ~ expr }
 unary = _{ number | ident}
 block = { "{" ~ (statement ~ ";")* ~ "}" }
 
-funcdef = { "func" ~ ident ~ block}
+funcdef = { "func" ~ ident ~ "(" ~ identlist ~ ")" ~ block}
 
 IF = { "if" ~ expr ~ block }
 

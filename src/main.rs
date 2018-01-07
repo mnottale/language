@@ -76,6 +76,7 @@ enum EValue {
   Str(&'static mut String),
 }
 
+
 impl Value {
   fn from_int(val: i32) -> Value {
     Value{v: (T_INT << TSHIFT) + ((val as u32) as u64)}
@@ -126,13 +127,15 @@ impl Clone for Value {
 }
 
 type Functions = HashMap<String, Box<Function>>;
+type ExprList = Vec<Box<Expression>>;
+type IdentList = Vec<String>;
 
 enum Expression {
   Constant(i32),
   GlobalVariable(String),
   StackVariable(i32),
   Operator{lhs: Box<Expression>, rhs: Box<Expression>, op: String},
-  FunctionCall{function: String},
+  FunctionCall{function: String, args: Vec<Box<Expression>>},
 }
 
 enum Statement {
@@ -146,6 +149,7 @@ enum Statement {
 type Stack = HashMap<String, i32>;
 
 struct Function {
+  formals: Vec<String>,
   code: Box<Block>,
   stack: Box<Stack>,
 }
@@ -188,9 +192,28 @@ fn parse_binary(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>,
 }
 
 fn parse_funccall(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, ctx: &mut ParseContext) -> Expression {
-  let content = pairs.next().unwrap();
-  return Expression::FunctionCall{function: content.into_span().as_str().to_string()};
+  let name = pairs.next().unwrap();
+  let eargs = pairs.next().unwrap();
+  let args = parse_exprlist(eargs.into_inner(), ctx);
+  return Expression::FunctionCall{args: args, function: name.into_span().as_str().to_string()};
 }
+
+fn parse_exprlist(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, ctx: &mut ParseContext) -> ExprList {
+  let mut res = ExprList::new();
+  for p in pairs {
+    res.push(Box::new(parse_expr(p.into_inner(), ctx)))
+  }
+  res
+}
+
+fn parse_identlist(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, _ctx: &mut ParseContext) -> IdentList {
+  let mut res = IdentList::new();
+  for p in pairs {
+    res.push(p.into_span().as_str().to_string())
+  }
+  res
+}
+
 
 fn parse_expr(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, ctx: &mut ParseContext) -> Expression {
   let content = pairs.next().unwrap();
@@ -264,13 +287,20 @@ fn process_toplevel(pair: pest::iterators::Pair<Rule, pest::inputs::StrInput>, m
     Rule::assign => exec_statement(&parse_assign(item.into_inner(), &mut ctx), &mut ExecContext{stack: Vec::new(), functions: Arc::clone(funcs)}),
     Rule::funccall => exec_expr(&parse_funccall(item.into_inner(), &mut ctx), &mut ExecContext{stack: Vec::new(), functions: Arc::clone(funcs)}),
     Rule::funcdef => {
-      ctx.stack = Some(Box::new(Stack::new()));
+      
       let mut comps = item.into_inner();
       let name = comps.next().unwrap();
+      let pformals = comps.next().unwrap();
+      let formals = parse_identlist(pformals.into_inner(), &mut ctx);
+      let mut stack = Stack::new();
+      for i in 0..formals.len() {
+        stack.insert(formals[i].clone(), i as i32);
+      }
+      ctx.stack = Some(Box::new(stack));
       let body = comps.next().unwrap();
       let mut block = parse_block(body.into_inner(), &mut ctx);
       Arc::get_mut(&mut funcs).unwrap().insert(name.clone().into_span().as_str().to_string(),
-        Box::new(Function{code: Box::new(block), stack: ctx.stack.unwrap()}));
+        Box::new(Function{formals: formals, code: Box::new(block), stack: ctx.stack.unwrap()}));
       0
     },
     _ => -1000000,
@@ -328,11 +358,14 @@ fn exec_expr(e: &Expression, ctx: &mut ExecContext) -> i32 {
         _ => 1000000,
       }
     },
-    Expression::FunctionCall{ref function} => {
+    Expression::FunctionCall{ref function, ref args} => {
       println!("Entering function {}", function);
-      let ref f = ctx.functions[function];
       let mut fctx = ExecContext{stack: Vec::new(), functions: Arc::clone(&ctx.functions)};
-      fctx.stack.resize(f.stack.len(), 0);
+      fctx.stack.resize(ctx.functions[function].stack.len(), 0);
+      for i in 0..args.len() {
+        fctx.stack[i] = exec_expr(&*args[i], ctx);
+      }
+      let ref f = ctx.functions[function];
       exec_block(f.deref().code.deref(), &mut fctx)
     }
   }
