@@ -25,7 +25,7 @@ use std::ops::DerefMut;
 
 
 lazy_static! {
-  static ref variables : Mutex<HashMap<String, i32>> = Mutex::new(HashMap::new());
+  static ref variables : Mutex<HashMap<String, Value>> = Mutex::new(HashMap::new());
   static ref arrays : Mutex<Allocator<Vec<Value>>> = Mutex::new(Allocator::new(Vec::new()));
   //static ref functions : Arc<HashMap<String, Box<Function>>> = Arc::new(HashMap::new());
 }
@@ -122,6 +122,13 @@ impl Value {
     if t == T_ARR { return EValue::Vec(self.as_vec()); }
     unreachable!()
   }
+  fn to_bool(& self) -> bool {
+    match self.evalue() {
+      EValue::Int(i) => i != 0,
+      EValue::Str(s) => s.len() != 0,
+      EValue::Vec(v) => v.len() != 0,
+    }
+  }
 }
 
 impl Drop for Value {
@@ -214,7 +221,7 @@ struct ParseContext {
 }
 
 struct ExecContext {
-  stack: Vec<i32>,
+  stack: Vec<Value>,
   functions: Arc<Functions>,
 }
 
@@ -340,7 +347,7 @@ fn parse_block(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, 
   return Block{statements: res};
 }
 
-fn process_toplevel(pair: pest::iterators::Pair<Rule, pest::inputs::StrInput>, mut funcs: &mut Arc<Functions>) -> i32 {
+fn process_toplevel(pair: pest::iterators::Pair<Rule, pest::inputs::StrInput>, mut funcs: &mut Arc<Functions>) -> Value {
   let item = pair.into_inner().next().unwrap();
   let mut ctx: ParseContext = ParseContext{stack: None};
   match item.as_rule() {
@@ -361,80 +368,78 @@ fn process_toplevel(pair: pest::iterators::Pair<Rule, pest::inputs::StrInput>, m
       let mut block = parse_block(body.into_inner(), &mut ctx);
       Arc::get_mut(&mut funcs).unwrap().insert(name.clone().into_span().as_str().to_string(),
         Box::new(Function{formals: formals, code: Box::new(block), stack: ctx.stack.unwrap()}));
-      0
+      Value::from_int(0)
     },
-    _ => -1000000,
+    _ => Value::from_int(-1000000),
   }
 }
 
-fn exec_statement(s: &Statement, ctx: &mut ExecContext) -> i32 {
+fn exec_statement(s: &Statement, ctx: &mut ExecContext) -> Value {
   match *s {
     Statement::GlobalAssignment{ref target, ref rhs} => {
       let val = exec_expr(&*rhs, ctx);
       //println!("assigning {} to {}", val, target);
       let mut v = variables.lock().unwrap();
-      let entry = v.entry(target.clone()).or_insert(0);
+      let entry = v.entry(target.clone()).or_insert(Value::from_int(0));
       *entry = val;
-      val
+      (*entry).clone()
     },
     Statement::StackAssignment{target, ref rhs} => {
       let val = exec_expr(&*rhs, ctx);
       ctx.stack[target as usize] = val;
-      val
+      ctx.stack[target as usize].clone()
     }
     Statement::Expression(ref e) => {
       exec_expr(&*e, ctx)
     },
     Statement::If{ref cond, ref block, ref blockelse} => {
       let cond = exec_expr(&*cond, ctx);
-      let mut res: i32 = 0;
-      if cond != 0 {
-        res = exec_block(&*block, ctx);
-      } else {
-        res = match *blockelse {
-          None => 0,
+      match cond.to_bool() {
+       true => exec_block(&*block, ctx),
+       false => match *blockelse {
+          None => Value::from_int(0),
           Some(ref b) => exec_block(&*b, ctx),
         }
       }
-      res
     }
   }
 }
 
-fn exec_block(b: &Block, ctx: &mut ExecContext) -> i32 {
-  let mut val: i32 = 0;
+fn exec_block(b: &Block, ctx: &mut ExecContext) -> Value {
+  let mut val: Value = Value::from_int(0);
   for ref s in &b.statements {
     val = exec_statement(&*s, ctx)
   }
   return val;
 }
 
-fn exec_expr(e: &Expression, ctx: &mut ExecContext) -> i32 {
+fn exec_expr(e: &Expression, ctx: &mut ExecContext) -> Value {
   match *e {
-    Expression::Constant(c) => c,
-    Expression::GlobalVariable(ref name) => variables.lock().unwrap()[name],
-    Expression::StackVariable(idx) => ctx.stack[idx as usize],
+    Expression::Constant(c) => Value::from_int(c),
+    Expression::GlobalVariable(ref name) => variables.lock().unwrap()[name].clone(),
+    Expression::StackVariable(idx) => ctx.stack[idx as usize].clone(),
     Expression::Operator {ref lhs, ref rhs, ref op} => {
-      let l = exec_expr(&*lhs, ctx);
-      let r = exec_expr(&*rhs, ctx);
-      match op.as_str() {
+      let l = exec_expr(&*lhs, ctx).as_int();
+      let r = exec_expr(&*rhs, ctx).as_int();
+      let r = match op.as_str() {
         "+" => l+r,
         "-" => l-r,
         ">" => { if l > r {1} else {0}},
         _ => 1000000,
-      }
+      };
+      Value::from_int(r)
     },
     Expression::Array(ref exprlist) => {
       let mut sum: i32 = 0;
       for e in exprlist {
-        sum += exec_expr(e, ctx);
+        sum += exec_expr(e, ctx).as_int();
       }
-      sum
+      Value::from_int(sum)
     },
     Expression::FunctionCall{ref function, ref args} => {
       //println!("Entering function {}", function);
       let mut fctx = ExecContext{stack: Vec::new(), functions: Arc::clone(&ctx.functions)};
-      fctx.stack.resize(ctx.functions[function].stack.len(), 0);
+      fctx.stack.resize(ctx.functions[function].stack.len(), Value::from_int(0));
       for i in 0..args.len() {
         fctx.stack[i] = exec_expr(&*args[i], ctx);
       }
@@ -493,9 +498,9 @@ fn main() {
         println!("  Rule:    {:?}", inner_pair.as_rule());
       }*/
       let val = process_toplevel(pair, &mut functions);
-      println!("={}", val);
+      println!("={:?}", val);
       for (k, v) in &state {
-        println!("{} = {}", k, v);
+        println!("{} = {:?}", k, v);
       }
     }
   }
