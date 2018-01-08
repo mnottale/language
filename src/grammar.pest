@@ -1,6 +1,6 @@
 alpha = { 'a'..'z' | 'A'..'Z' }
 digit = { '0'..'9' }
-operator =  @{ "+" | "-"}
+operator =  @{ "+" | "-" | ">"}
 
 number = @{ (digit)+ }
 ident = @{ alpha ~ (alpha | digit)* }
@@ -15,14 +15,14 @@ vardecl = { "var" ~ ident ~ "=" ~ expr}
 
 array = { "[" ~ exprlist ~ "]" }
 expr = { funccall | binary | number | ident | array | ( "(" ~ expr ~ ")" ) }
-statement = { vardecl | assign | expr | IF}
+statement = { vardecl | assign | IF | expr }
 binary = { (unary | ( "(" ~ expr ~ ")" )) ~ operator ~ expr }
 unary = _{ number | ident}
 block = { "{" ~ (statement ~ ";")* ~ "}" }
 
 funcdef = { "func" ~ ident ~ "(" ~ identlist ~ ")" ~ block}
 
-IF = { "if" ~ expr ~ block }
+IF = { "if" ~ expr ~ block ~ ( "else" ~ block )?}
 
 
 toplevel = { funcdef | funccall | assign}

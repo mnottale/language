@@ -192,7 +192,7 @@ enum Expression {
 enum Statement {
   GlobalAssignment{target: String, rhs: Box<Expression>},
   StackAssignment{target: i32, rhs: Box<Expression>},
-  If{cond: Box<Expression>, block: Box<Block>},
+  If{cond: Box<Expression>, block: Box<Block>, blockelse: Option<Box<Block>>},
   Expression(Box<Expression>),
 }
 
@@ -254,6 +254,7 @@ fn parse_exprlist(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput
   for p in pairs {
     res.push(Box::new(parse_expr(p.into_inner(), ctx)))
   }
+  println!("Parsed exprlist of len {}", res.len());
   res
 }
 
@@ -274,7 +275,9 @@ fn parse_expr(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, c
       Rule::number => Expression::Constant(content.into_span().as_str().to_string().parse::<i32>().unwrap()),
       Rule::ident =>  parse_variable(content.into_span().as_str().to_string(), ctx),
       Rule::expr => parse_expr(content.into_inner(), ctx),
-      Rule::array => Expression::Array(parse_exprlist(content.into_inner(), ctx)),
+      Rule::array => {
+        Expression::Array(parse_exprlist(content.into_inner().next().unwrap().into_inner(), ctx))
+      },
       _ => Expression::Constant(1000001),
   }
 }
@@ -299,6 +302,7 @@ fn parse_statement(pair: pest::iterators::Pair<Rule, pest::inputs::StrInput>, ct
   }
 }
 
+
 fn parse_if(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, ctx: &mut ParseContext) -> Statement {
   let expr = pairs.next().unwrap();
   let block = pairs.next().unwrap();
@@ -306,7 +310,11 @@ fn parse_if(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, ctx
   println!("Block:    {}", block.clone().into_span().as_str());
   let cond =  parse_expr(expr.into_inner(), ctx);
   let block = parse_block(block.into_inner(), ctx);
-  Statement::If{cond: Box::new(cond), block: Box::new(block)}
+  let belse = match pairs.next() {
+    None => None,
+    Some(b) => Some(Box::new(parse_block(b.into_inner(), ctx))),
+  };
+  Statement::If{cond: Box::new(cond), block: Box::new(block), blockelse: belse}
 }
 
 fn parse_assign(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, ctx: &mut ParseContext) -> Statement {
@@ -377,12 +385,17 @@ fn exec_statement(s: &Statement, ctx: &mut ExecContext) -> i32 {
     Statement::Expression(ref e) => {
       exec_expr(&*e, ctx)
     },
-    Statement::If{ref cond, ref block} => {
+    Statement::If{ref cond, ref block, ref blockelse} => {
       let cond = exec_expr(&*cond, ctx);
       let mut res: i32 = 0;
       if cond != 0 {
         res = exec_block(&*block, ctx);
-      };
+      } else {
+        res = match *blockelse {
+          None => 0,
+          Some(ref b) => exec_block(&*b, ctx),
+        }
+      }
       res
     }
   }
@@ -407,14 +420,19 @@ fn exec_expr(e: &Expression, ctx: &mut ExecContext) -> i32 {
       match op.as_str() {
         "+" => l+r,
         "-" => l-r,
+        ">" => { if l > r {1} else {0}},
         _ => 1000000,
       }
     },
     Expression::Array(ref exprlist) => {
-      10000
+      let mut sum: i32 = 0;
+      for e in exprlist {
+        sum += exec_expr(e, ctx);
+      }
+      sum
     },
     Expression::FunctionCall{ref function, ref args} => {
-      println!("Entering function {}", function);
+      //println!("Entering function {}", function);
       let mut fctx = ExecContext{stack: Vec::new(), functions: Arc::clone(&ctx.functions)};
       fctx.stack.resize(ctx.functions[function].stack.len(), 0);
       for i in 0..args.len() {
@@ -482,3 +500,8 @@ fn main() {
     }
   }
 }
+
+
+/*
+func fibo(x) { if x > 2 { (fibo(x-1))+(fibo(x-2));} else {x;};}
+*/
