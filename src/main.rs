@@ -71,9 +71,13 @@ static T_INT:u64 = 1;
 static T_STR:u64 = 2;
 static T_ARR:u64 = 3;
 
+type List = Vec<Value>;
+
+#[derive(Debug)]
 enum EValue {
   Int(i32),
   Str(&'static mut String),
+  Vec(&'static mut List),
 }
 
 
@@ -85,6 +89,13 @@ impl Value {
     let sptr = Box::into_raw(Box::new(val));
     Value{v: (T_STR << TSHIFT) + (sptr as u64)}
   }
+  fn from_vec(val: List) -> Value {
+    let l =  Box::into_raw(Box::new(val));
+    //println!("{:x}", l as u64);
+    let cp = Box::into_raw(Box::new((l as u64) | ((1 as u64) << TSHIFT)));
+    //println!("{:x}", cp as u64);
+    Value{v: (T_ARR << TSHIFT) + (cp as u64)}
+  }
   fn vtype(&self) -> u64 {
     ((self.v &TMASK) >> TSHIFT)
   }
@@ -93,13 +104,22 @@ impl Value {
       &mut*((self.v&AMASK) as *mut String)
     }
   }
+  fn as_vec(& self) -> &'static mut List {
+    unsafe {
+      //println!("{:x}", self.v & AMASK);
+      let cp = * ((self.v&AMASK) as *mut u64);
+      //println!("{:x}", cp);
+      &mut*((cp & AMASK) as *mut List)
+    }
+  }
   fn as_int(& self) -> i32 {
     ((self.v & AMASK) as u32) as i32
   }
-  fn evalue(&mut self) -> EValue {
+  fn evalue(& self) -> EValue {
     let t = self.vtype();
     if t == T_INT { return EValue::Int(self.as_int()); }
     if t == T_STR { return EValue::Str(self.as_str()); }
+    if t == T_ARR { return EValue::Vec(self.as_vec()); }
     unreachable!()
   }
 }
@@ -109,6 +129,21 @@ impl Drop for Value {
     if self.vtype() == T_STR {
       unsafe {
         Box::from_raw( (self.v & AMASK) as *mut String);
+      }
+    }
+    if self.vtype() == T_ARR {
+      // decrease refcount
+      unsafe {
+        let cp = * ((self.v&AMASK) as *mut u64);
+        let mut count = (cp & TMASK) >> TSHIFT;
+        count-= 1;
+        if count == 0 {
+          Box::from_raw((cp & AMASK) as *mut List);
+          Box::from_raw((self.v&AMASK) as *mut u64);
+        }
+        else {
+          * ((self.v&AMASK) as *mut u64) -= 1 << TSHIFT;
+        }
       }
     }
   }
@@ -122,8 +157,23 @@ impl Clone for Value {
     if self.vtype() == T_INT {
       return Value{v: self.v};
     }
+    if self.vtype() == T_ARR {
+      unsafe {
+        // increase refcount
+        * ((self.v&AMASK) as *mut u64) += 1 << TSHIFT;
+        return Value{v: self.v};
+      }
+    }
     unreachable!();
   }
+}
+
+use std::fmt::Debug;
+
+impl Debug for Value {
+ fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+   self.evalue().fmt(f)
+ }
 }
 
 type Functions = HashMap<String, Box<Function>>;
@@ -134,6 +184,7 @@ enum Expression {
   Constant(i32),
   GlobalVariable(String),
   StackVariable(i32),
+  Array(ExprList),
   Operator{lhs: Box<Expression>, rhs: Box<Expression>, op: String},
   FunctionCall{function: String, args: Vec<Box<Expression>>},
 }
@@ -223,6 +274,7 @@ fn parse_expr(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, c
       Rule::number => Expression::Constant(content.into_span().as_str().to_string().parse::<i32>().unwrap()),
       Rule::ident =>  parse_variable(content.into_span().as_str().to_string(), ctx),
       Rule::expr => parse_expr(content.into_inner(), ctx),
+      Rule::array => Expression::Array(parse_exprlist(content.into_inner(), ctx)),
       _ => Expression::Constant(1000001),
   }
 }
@@ -358,6 +410,9 @@ fn exec_expr(e: &Expression, ctx: &mut ExecContext) -> i32 {
         _ => 1000000,
       }
     },
+    Expression::Array(ref exprlist) => {
+      10000
+    },
     Expression::FunctionCall{ref function, ref args} => {
       println!("Entering function {}", function);
       let mut fctx = ExecContext{stack: Vec::new(), functions: Arc::clone(&ctx.functions)};
@@ -374,12 +429,26 @@ fn exec_expr(e: &Expression, ctx: &mut ExecContext) -> i32 {
 fn test_value() {
   let vi = Value::from_int(-42);
   let vs = Value::from_str("foo".to_string());
+  let vv = Value::from_vec(vec![Value::from_int(1),Value::from_int(2),Value::from_int(3)]);
   println!("vi: {}", vi.as_int());
   println!("vs: {}", vs.as_str());
-  let vi2 = vi.clone();
-  let vs2 = vs.clone();
-  println!("vi: {}", vi2.as_int());
-  println!("vs: {}", vs2.as_str());
+  println!("vv: {:?}", vv.as_vec());
+  {
+    let vi2 = vi.clone();
+    let vs2 = vs.clone();
+    let vv2 = vv.clone();
+    println!("vi: {}", vi2.as_int());
+    println!("vs: {}", vs2.as_str());
+    println!("vv: {:?}", vv2.as_vec());
+  }
+  {
+    let vi2 = vi.clone();
+    let vs2 = vs.clone();
+    let vv2 = vv.clone();
+    println!("vi: {}", vi2.as_int());
+    println!("vs: {}", vs2.as_str());
+    println!("vv: {:?}", vv2.as_vec());
+  }
 }
 
 fn main() {

@@ -13,7 +13,8 @@ funccall = { ident ~ "(" ~ exprlist ~ ")" }
 
 vardecl = { "var" ~ ident ~ "=" ~ expr}
 
-expr = { funccall | binary | number | ident | ( "(" ~ expr ~ ")" ) }
+array = { "[" ~ exprlist ~ "]" }
+expr = { funccall | binary | number | ident | array | ( "(" ~ expr ~ ")" ) }
 statement = { vardecl | assign | expr | IF}
 binary = { (unary | ( "(" ~ expr ~ ")" )) ~ operator ~ expr }
 unary = _{ number | ident}
