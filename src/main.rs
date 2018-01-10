@@ -267,7 +267,7 @@ enum Expression {
   GlobalVariable(String),
   StackVariable(i32),
   Array(ExprList),
-  Dot{lhs: Box<Expression>, rhs: String},
+  Dot{lhs: Box<Expression>, rhs: String, cacheClass: *const Class, cacheIndex: i32},
   ObjDef{cls: String, init: Vec<Box<Expression>>},
   SubScript{v: Box<Expression>, idx: Box<Expression>},
   Operator{lhs: Box<Expression>, rhs: Box<Expression>, op: String},
@@ -277,7 +277,7 @@ enum Expression {
 enum Statement {
   GlobalAssignment{target: String, rhs: Box<Expression>},
   StackAssignment{target: i32, rhs: Box<Expression>},
-  ObjAssignment{target: Box<Expression>, slot: String, rhs: Box<Expression>},
+  ObjAssignment{target: Box<Expression>, slot: String, rhs: Box<Expression>, cacheClass: *const Class, cacheIndex: i32},
   If{cond: Box<Expression>, block: Box<Block>, blockelse: Option<Box<Block>>},
   Expression(Box<Expression>),
 }
@@ -310,6 +310,16 @@ struct ExecContext {
   stack: Vec<Value>,
   functions: Arc<Functions>,
   classes: Arc<Classes>,
+}
+
+// DIE BEARCLAW DIE
+fn bearclaw<T>(t: &T) -> &'static mut T {
+  unsafe {
+    let tt = t as *const T;
+    let tt2 = tt as u64;
+    let tt3 = tt2 as *mut T;
+    return &mut *tt3;
+  }
 }
 
 fn parse_classdecl(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, _ctx: &mut ParseContext) -> Class {
@@ -382,7 +392,7 @@ fn parse_identchain(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInp
   let mut init = parse_variable(first, ctx);
   for p in pairs {
     let next = p.into_span().as_str().to_string();
-    init = Expression::Dot{lhs: Box::new(init), rhs: next};
+    init = Expression::Dot{lhs: Box::new(init), rhs: next, cacheClass: 0 as *const Class, cacheIndex: 0};
   }
   init
 }
@@ -405,7 +415,7 @@ fn parse_expr(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, c
   // parse subsequents [expr] or .ident
   for p in pairs {
     v = match p.as_rule() {
-      Rule::ident => Expression::Dot{lhs: Box::new(v), rhs: p.into_span().as_str().to_string()},
+      Rule::ident => Expression::Dot{lhs: Box::new(v), rhs: p.into_span().as_str().to_string(), cacheClass: 0 as *const Class, cacheIndex:0},
       Rule::expr => Expression::SubScript{v: Box::new(v), idx: Box::new(parse_expr(p.into_inner(), ctx))},
       _ => unreachable!(),
     }
@@ -458,7 +468,7 @@ fn parse_assign(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>,
   match ident {
     Expression::GlobalVariable(v) => Statement::GlobalAssignment{target: v, rhs: Box::new(rrhs)},
     Expression::StackVariable(v) => Statement::StackAssignment{target: v, rhs: Box::new(rrhs)},
-    Expression::Dot{lhs, rhs} => Statement::ObjAssignment{target: lhs, slot: rhs, rhs: Box::new(rrhs)},
+    Expression::Dot{lhs, rhs, cacheClass, cacheIndex} => Statement::ObjAssignment{target: lhs, slot: rhs, rhs: Box::new(rrhs), cacheClass: 0 as *const Class, cacheIndex: 0},
     _ => {unreachable!()},
   }
 }
@@ -534,14 +544,24 @@ fn exec_statement(s: &Statement, ctx: &mut ExecContext) -> Value {
         }
       }
     },
-    Statement::ObjAssignment{ref target, ref slot, ref rhs} => {
+    Statement::ObjAssignment{ref target, ref slot, ref rhs, ref cacheClass, ref cacheIndex} => {
       let tgt = exec_expr(&*target, ctx);
       let v = exec_expr(&*rhs, ctx);
       match tgt.evalue() {
         EValue::Obj(o) => {
-          match o.class.fields.get(slot) {
-            Some(idx) => {o.fields[*idx as usize] = v.clone(); v},
-            None => Value::from_err(String::new() + "no such field: " + &slot),
+          if o.class as *const Class == *cacheClass {
+            o.fields[*cacheIndex as usize] = v.clone();
+            v
+          } else {
+            match o.class.fields.get(slot) {
+              Some(idx) => {
+                *bearclaw(cacheClass) = o.class;
+                *bearclaw(cacheIndex) = *idx;
+                o.fields[*idx as usize] = v.clone();
+                v
+              },
+              None => Value::from_err(String::new() + "no such field: " + &slot),
+            }
           }
         },
         _ => Value::from_err("assignment to field of non-object".to_string()),
@@ -626,13 +646,21 @@ fn exec_expr(e: &Expression, ctx: &mut ExecContext) -> Value {
         Value::from_obj(obj)
       }
     },
-    Expression::Dot{ref lhs, ref rhs} => {
+    Expression::Dot{ref lhs, ref rhs, ref cacheClass, ref cacheIndex} => {
       let val = exec_expr(&*lhs, ctx);
       match val.evalue() {
         EValue::Obj(o) => {
-          match o.class.fields.get(rhs) {
-            Some(idx) => o.fields[*idx as usize].clone(),
-            None => Value::from_err(String::new() + "missing field: " + rhs),
+          if o.class as *const Class == *cacheClass {
+            o.fields[*cacheIndex as usize].clone()
+          } else {
+            match o.class.fields.get(rhs) {
+              Some(idx) => {
+                *bearclaw(cacheClass) = o.class;
+                *bearclaw(cacheIndex) = *idx;
+                o.fields[*idx as usize].clone()
+              },
+              None => Value::from_err(String::new() + "missing field: " + rhs),
+            }
           }
         },
         _ => Value::from_err("value left of '.' is not an object".to_string()),
@@ -711,7 +739,10 @@ FIBO ON OBJECT
 class obj{x;}
 func fibo(x) { if x.x > 2 { var va = fibo(obj{x.x-1}); var vb = fibo(obj{x.x-2});  obj{va.x+vb.x};} else {x;};}
 func fibo(x) { if x.x > 2 { obj{(fibo(obj{x.x-1}).x) + fibo(obj{x.x-2}).x};} else {x;};}
-z=fibo(obj{34}): 6.1s
+z=fibo(obj{34}):
+base 6.1s
+cache index read: 5.1
+cache index write: 5.1  <--dummy we don't use those but object initializer
 python equivalent: 9s
 
 */
