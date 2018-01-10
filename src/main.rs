@@ -172,7 +172,7 @@ impl Value {
   }
   fn to_bool(& self) -> bool {
     match self.evalue() {
-      EValue::Int(i) => i != 0,
+      EValue::Int(i) => i != 0 as i32,
       EValue::Str(s) => s.len() != 0,
       EValue::Vec(v) => v.len() != 0,
       EValue::Obj(_o) => true,
@@ -345,9 +345,9 @@ fn parse_binary(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>,
   let expr = pairs.next().unwrap();
   let v1 = match noie.as_rule() {
     Rule::number => Expression::Constant(noie.into_span().as_str().to_string().parse::<i32>().unwrap()),
-    Rule::ident =>  parse_variable(noie.into_span().as_str().to_string(), ctx),
+    Rule::identchain => parse_identchain(noie.into_inner(), ctx),
     Rule::expr => parse_expr(noie.into_inner(), ctx),
-    _ => Expression::Constant(1000000),
+    _ => unreachable!(),
   };
   let v2 = parse_expr(expr.into_inner(), ctx);
   return Expression::Operator{lhs: Box::new(v1), rhs: Box::new(v2), op: op.into_span().as_str().to_string()}
@@ -400,7 +400,7 @@ fn parse_expr(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, c
         Expression::Array(parse_exprlist(content.into_inner().next().unwrap().into_inner(), ctx))
       },
       Rule::objdef => parse_objdef(content.into_inner(), ctx),
-      _ => Expression::Constant(1000001),
+      _ => unreachable!(),
   };
   match pairs.next() {
     None => v,
@@ -417,12 +417,15 @@ fn parse_statement(pair: pest::iterators::Pair<Rule, pest::inputs::StrInput>, ct
     Rule::IF => parse_if(inner_pair.into_inner(), ctx),
     Rule::expr => Statement::Expression(Box::new(parse_expr(inner_pair.into_inner(), ctx))),
     Rule::vardecl => {
-      let ident = inner_pair.clone().into_inner().next().unwrap().into_span().as_str().to_string();
+      let mut vd = inner_pair.into_inner();
+      let ident = vd.next().unwrap().into_span().as_str().to_string();
+      let mut idx = 0;
       match ctx.stack {
         None => {},
-        Some(ref mut cf) => { let len = cf.deref().len(); cf.deref_mut().insert(ident, len as i32);}
+        Some(ref mut cf) => { let len = cf.deref().len(); cf.deref_mut().insert(ident, len as i32);idx = len;}
       };
-      parse_assign(inner_pair.into_inner(), ctx)
+      let rhs = parse_expr(vd.next().unwrap().into_inner(), ctx);
+      Statement::StackAssignment{target: idx as i32, rhs: Box::new(rhs)}
     }
     other => {println!("Unhandled:    {:?}", other); Statement::Expression(Box::new(Expression::Constant(100000)))},
   }
@@ -517,6 +520,7 @@ fn exec_statement(s: &Statement, ctx: &mut ExecContext) -> Value {
     },
     Statement::If{ref cond, ref block, ref blockelse} => {
       let cond = exec_expr(&*cond, ctx);
+      //println!("Condition is {}", cond.to_bool());
       match cond.to_bool() {
        true => exec_block(&*block, ctx),
        false => match *blockelse {
@@ -560,7 +564,10 @@ fn exec_expr(e: &Expression, ctx: &mut ExecContext) -> Value {
       let r = match op.as_str() {
         "+" => l+r,
         "-" => l-r,
-        ">" => { if l > r {1} else {0}},
+        ">" => {
+          // println!("lhs: {}, rhs: {}", l, r);
+          if l > r {1} else {0}
+        },
         _ => 1000000,
       };
       Value::from_int(r)
@@ -690,4 +697,8 @@ fn main() {
 
 /*
 func fibo(x) { if x > 2 { (fibo(x-1))+(fibo(x-2));} else {x;};}
+
+class obj{x;}
+func fibo(x) { if x.x > 2 { var va = fibo(obj{x.x-1}); var vb = fibo(obj{x.x-2});  obj{va.x+vb.x};} else {x;};}
+z=fibo(obj{1})
 */
