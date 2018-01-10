@@ -267,6 +267,7 @@ enum Expression {
   GlobalVariable(String),
   StackVariable(i32),
   Array(ExprList),
+  Dot{lhs: Box<Expression>, rhs: String},
   ObjDef{cls: String, init: Vec<Box<Expression>>},
   SubScript{v: Box<Expression>, idx: Box<Expression>},
   Operator{lhs: Box<Expression>, rhs: Box<Expression>, op: String},
@@ -276,6 +277,7 @@ enum Expression {
 enum Statement {
   GlobalAssignment{target: String, rhs: Box<Expression>},
   StackAssignment{target: i32, rhs: Box<Expression>},
+  ObjAssignment{target: Box<Expression>, slot: String, rhs: Box<Expression>},
   If{cond: Box<Expression>, block: Box<Block>, blockelse: Option<Box<Block>>},
   Expression(Box<Expression>),
 }
@@ -310,7 +312,7 @@ struct ExecContext {
   classes: Arc<Classes>,
 }
 
-fn parse_classdecl(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, ctx: &mut ParseContext) -> Class {
+fn parse_classdecl(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, _ctx: &mut ParseContext) -> Class {
   let name = pairs.next().unwrap().into_span().as_str().to_string();
   let mut fields = HashMap::new();
   for p in pairs {
@@ -375,6 +377,15 @@ fn parse_identlist(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInpu
   res
 }
 
+fn parse_identchain(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, ctx: &mut ParseContext) -> Expression {
+  let first = pairs.next().unwrap().into_span().as_str().to_string();
+  let mut init = parse_variable(first, ctx);
+  for p in pairs {
+    let next = p.into_span().as_str().to_string();
+    init = Expression::Dot{lhs: Box::new(init), rhs: next};
+  }
+  init
+}
 
 fn parse_expr(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, ctx: &mut ParseContext) -> Expression {
   let content = pairs.next().unwrap();
@@ -383,6 +394,7 @@ fn parse_expr(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, c
       Rule::funccall => parse_funccall(content.into_inner(), ctx),
       Rule::number => Expression::Constant(content.into_span().as_str().to_string().parse::<i32>().unwrap()),
       Rule::ident =>  parse_variable(content.into_span().as_str().to_string(), ctx),
+      Rule::identchain => parse_identchain(content.into_inner(), ctx),
       Rule::expr => parse_expr(content.into_inner(), ctx),
       Rule::array => {
         Expression::Array(parse_exprlist(content.into_inner().next().unwrap().into_inner(), ctx))
@@ -432,16 +444,14 @@ fn parse_if(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, ctx
 }
 
 fn parse_assign(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, ctx: &mut ParseContext) -> Statement {
-  let ident = pairs.next().unwrap();
+  let ident = parse_identchain(pairs.next().unwrap().into_inner(), ctx);
   let expr = pairs.next().unwrap();
-  let rhs = parse_expr(expr.into_inner(), ctx);
-  let target = ident.clone().into_span().as_str().to_string();
-  match ctx.stack {
-    None => Statement::GlobalAssignment{target: target, rhs: Box::new(rhs)},
-    Some(ref s) => match s.deref().get(&target) {
-      None => Statement::GlobalAssignment{target: target, rhs: Box::new(rhs)},
-      Some(idx) => Statement::StackAssignment{target: *idx, rhs: Box::new(rhs)},
-    }
+  let rrhs = parse_expr(expr.into_inner(), ctx);
+  match ident {
+    Expression::GlobalVariable(v) => Statement::GlobalAssignment{target: v, rhs: Box::new(rrhs)},
+    Expression::StackVariable(v) => Statement::StackAssignment{target: v, rhs: Box::new(rrhs)},
+    Expression::Dot{lhs, rhs} => Statement::ObjAssignment{target: lhs, slot: rhs, rhs: Box::new(rrhs)},
+    _ => {unreachable!()},
   }
 }
 
@@ -514,6 +524,19 @@ fn exec_statement(s: &Statement, ctx: &mut ExecContext) -> Value {
           Some(ref b) => exec_block(&*b, ctx),
         }
       }
+    },
+    Statement::ObjAssignment{ref target, ref slot, ref rhs} => {
+      let tgt = exec_expr(&*target, ctx);
+      let v = exec_expr(&*rhs, ctx);
+      match tgt.evalue() {
+        EValue::Obj(o) => {
+          match o.class.fields.get(slot) {
+            Some(idx) => {o.fields[*idx as usize] = v.clone(); v},
+            None => Value::from_err(String::new() + "no such field: " + &slot),
+          }
+        },
+        _ => Value::from_err("assignment to field of non-object".to_string()),
+      }
     }
   }
 }
@@ -553,7 +576,7 @@ fn exec_expr(e: &Expression, ctx: &mut ExecContext) -> Value {
           EValue::Int(_ii) => Value::from_err("int cannot be indexed".to_string()),
           EValue::Str(data) => Value::from_int(data.clone().into_bytes()[i.as_int() as usize] as i32),
           EValue::Err(e) => Value::from_err(e.clone()),
-          EValue::Obj(o) => Value::from_err("objects cannot be indexed".to_string()),
+          EValue::Obj(_o) => Value::from_err("objects cannot be indexed".to_string()),
           EValue::Vec(v) => if v.len() <= (i.as_int() as usize) || i.as_int() < 0 {
             Value::from_err("invalid index value".to_string())
           } else {
@@ -580,13 +603,27 @@ fn exec_expr(e: &Expression, ctx: &mut ExecContext) -> Value {
       exec_block(f.deref().code.deref(), &mut fctx)
     },
     Expression::ObjDef{ref cls, ref init} => {
-      let ref class = ctx.classes[cls];
-      if class.fields.len() != init.len() {
+      if ctx.classes[cls].fields.len() != init.len() {
         Value::from_err(String::new() + "Initializer list has wrong size for " + cls)
       } else {
-        let mut obj = Object::new(class);
-        
+        let mut obj = Object::new(&*ctx.classes[cls]);
+        for i in 0..init.len() {
+          let v = exec_expr(&*init[i], ctx);
+          obj.fields.push(v);
+        }
         Value::from_obj(obj)
+      }
+    },
+    Expression::Dot{ref lhs, ref rhs} => {
+      let val = exec_expr(&*lhs, ctx);
+      match val.evalue() {
+        EValue::Obj(o) => {
+          match o.class.fields.get(rhs) {
+            Some(idx) => o.fields[*idx as usize].clone(),
+            None => Value::from_err(String::new() + "missing field: " + rhs),
+          }
+        },
+        _ => Value::from_err("value left of '.' is not an object".to_string()),
       }
     }
   }

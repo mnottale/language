@@ -7,7 +7,7 @@ ident = @{ alpha ~ (alpha | digit)* }
 
 exprlist = { expr ? ~ ("," ~ expr)* } 
 identlist = {ident ? ~ ("," ~ ident)*}
-assign = { ident ~ "=" ~ expr }
+assign = { identchain ~ "=" ~ expr }
 
 funccall = { ident ~ "(" ~ exprlist ~ ")" }
 
@@ -15,10 +15,16 @@ vardecl = { "var" ~ ident ~ "=" ~ expr}
 
 objdef = { ident ~ "{" ~ exprlist ~ "}" }
 
+identchain = { ident ~ ( "." ~ ident)* }
+
 array = { "[" ~ exprlist ~ "]" }
-expr = { (objdef | funccall | binary | number | ident | array | ( "(" ~ expr ~ ")" )) ~ ("[" ~ expr ~ "]")? }
+
+expr = { (objdef | funccall | binary | number | identchain | array | ( "(" ~ expr ~ ")" )) ~ ("[" ~ expr ~ "]")? }
+
+binary = { (number | identchain | ( "(" ~ expr ~ ")" )) ~ operator ~ expr }
+
+
 statement = { vardecl | assign | IF | expr }
-binary = { (unary | ( "(" ~ expr ~ ")" )) ~ operator ~ expr }
 unary = _{ number | ident}
 block = { "{" ~ (statement ~ ";")* ~ "}" }
 
