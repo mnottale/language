@@ -71,6 +71,7 @@ static T_INT:u64 = 1;
 static T_STR:u64 = 2;
 static T_ARR:u64 = 3;
 static T_ERR:u64 = 4;
+static T_OBJ:u64 = 5;
 
 type List = Vec<Value>;
 
@@ -80,8 +81,27 @@ enum EValue {
   Str(&'static mut String),
   Err(&'static mut String),
   Vec(&'static mut List),
+  Obj(&'static mut Object),
 }
 
+struct Object {
+  class: &'static Class,
+  fields: Vec<Value>,
+}
+
+impl Object {
+  fn new(class: &Class) -> Object {
+    unsafe {
+      Object{class: &*(class as *const Class), fields: Vec::new()}
+    }
+  }
+}
+
+impl Debug for Object {
+  fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+   self.class.name.fmt(f)
+ }
+}
 
 impl Value {
   fn from_int(val: i32) -> Value {
@@ -101,6 +121,13 @@ impl Value {
     let cp = Box::into_raw(Box::new((l as u64) | ((1 as u64) << TSHIFT)));
     //println!("{:x}", cp as u64);
     Value{v: (T_ARR << TSHIFT) + (cp as u64)}
+  }
+  fn from_obj(val: Object) -> Value {
+    let l =  Box::into_raw(Box::new(val));
+    //println!("{:x}", l as u64);
+    let cp = Box::into_raw(Box::new((l as u64) | ((1 as u64) << TSHIFT)));
+    //println!("{:x}", cp as u64);
+    Value{v: (T_OBJ << TSHIFT) + (cp as u64)}
   }
   fn vtype(&self) -> u64 {
     ((self.v &TMASK) >> TSHIFT)
@@ -123,6 +150,14 @@ impl Value {
       &mut*((cp & AMASK) as *mut List)
     }
   }
+  fn as_obj(&self) -> &'static mut Object {
+  unsafe {
+      //println!("{:x}", self.v & AMASK);
+      let cp = * ((self.v&AMASK) as *mut u64);
+      //println!("{:x}", cp);
+      &mut*((cp & AMASK) as *mut Object)
+    }
+  }
   fn as_int(& self) -> i32 {
     ((self.v & AMASK) as u32) as i32
   }
@@ -132,6 +167,7 @@ impl Value {
     if t == T_STR { return EValue::Str(self.as_str()); }
     if t == T_ERR { return EValue::Err(self.as_err()); }
     if t == T_ARR { return EValue::Vec(self.as_vec()); }
+    if t == T_OBJ { return EValue::Obj(self.as_obj()); }
     unreachable!()
   }
   fn to_bool(& self) -> bool {
@@ -139,6 +175,7 @@ impl Value {
       EValue::Int(i) => i != 0,
       EValue::Str(s) => s.len() != 0,
       EValue::Vec(v) => v.len() != 0,
+      EValue::Obj(_o) => true,
       EValue::Err(_e) => true,
     }
   }
@@ -159,6 +196,21 @@ impl Drop for Value {
         count-= 1;
         if count == 0 {
           Box::from_raw((cp & AMASK) as *mut List);
+          Box::from_raw((self.v&AMASK) as *mut u64);
+        }
+        else {
+          * ((self.v&AMASK) as *mut u64) -= 1 << TSHIFT;
+        }
+      }
+    }
+    if self.vtype() == T_OBJ {
+      // decrease refcount
+      unsafe {
+        let cp = * ((self.v&AMASK) as *mut u64);
+        let mut count = (cp & TMASK) >> TSHIFT;
+        count-= 1;
+        if count == 0 {
+          Box::from_raw((cp & AMASK) as *mut Object);
           Box::from_raw((self.v&AMASK) as *mut u64);
         }
         else {
@@ -187,6 +239,13 @@ impl Clone for Value {
         return Value{v: self.v};
       }
     }
+    if self.vtype() == T_OBJ {
+      unsafe {
+        // increase refcount
+        * ((self.v&AMASK) as *mut u64) += 1 << TSHIFT;
+        return Value{v: self.v};
+      }
+    }
     unreachable!();
   }
 }
@@ -208,6 +267,7 @@ enum Expression {
   GlobalVariable(String),
   StackVariable(i32),
   Array(ExprList),
+  ObjDef{cls: String, init: Vec<Box<Expression>>},
   SubScript{v: Box<Expression>, idx: Box<Expression>},
   Operator{lhs: Box<Expression>, rhs: Box<Expression>, op: String},
   FunctionCall{function: String, args: Vec<Box<Expression>>},
@@ -223,6 +283,11 @@ enum Statement {
 // variable name -> stack index
 type Stack = HashMap<String, i32>;
 
+struct Class {
+  name: String,
+  fields: HashMap<String, i32>,
+}
+
 struct Function {
   formals: Vec<String>,
   code: Box<Block>,
@@ -237,9 +302,23 @@ struct ParseContext {
   stack: Option<Box<Stack>>,
 }
 
+type Classes = HashMap<String, Box<Class>>;
+
 struct ExecContext {
   stack: Vec<Value>,
   functions: Arc<Functions>,
+  classes: Arc<Classes>,
+}
+
+fn parse_classdecl(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, ctx: &mut ParseContext) -> Class {
+  let name = pairs.next().unwrap().into_span().as_str().to_string();
+  let mut fields = HashMap::new();
+  for p in pairs {
+    let fname = p.into_span().as_str().to_string();
+    let l = fields.len();
+    fields.insert(fname, l as i32);
+  }
+  Class{name: name, fields: fields}
 }
 
 fn parse_variable(name: String, ctx: &mut ParseContext) -> Expression {
@@ -250,6 +329,12 @@ fn parse_variable(name: String, ctx: &mut ParseContext) -> Expression {
       Some(idx) => Expression::StackVariable(*idx)
     }
   }
+}
+
+fn parse_objdef(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, ctx: &mut ParseContext) -> Expression {
+  let name = pairs.next().unwrap().into_span().as_str().to_string();
+  let init = parse_exprlist(pairs.next().unwrap().into_inner(), ctx);
+  Expression::ObjDef{cls: name, init: init}
 }
 
 fn parse_binary(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, ctx: &mut ParseContext) -> Expression {
@@ -302,6 +387,7 @@ fn parse_expr(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, c
       Rule::array => {
         Expression::Array(parse_exprlist(content.into_inner().next().unwrap().into_inner(), ctx))
       },
+      Rule::objdef => parse_objdef(content.into_inner(), ctx),
       _ => Expression::Constant(1000001),
   };
   match pairs.next() {
@@ -368,12 +454,12 @@ fn parse_block(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, 
   return Block{statements: res};
 }
 
-fn process_toplevel(pair: pest::iterators::Pair<Rule, pest::inputs::StrInput>, mut funcs: &mut Arc<Functions>) -> Value {
+fn process_toplevel(pair: pest::iterators::Pair<Rule, pest::inputs::StrInput>, mut funcs: &mut Arc<Functions>, mut classes: &mut Arc<Classes>) -> Value {
   let item = pair.into_inner().next().unwrap();
   let mut ctx: ParseContext = ParseContext{stack: None};
   match item.as_rule() {
-    Rule::assign => exec_statement(&parse_assign(item.into_inner(), &mut ctx), &mut ExecContext{stack: Vec::new(), functions: Arc::clone(funcs)}),
-    Rule::funccall => exec_expr(&parse_funccall(item.into_inner(), &mut ctx), &mut ExecContext{stack: Vec::new(), functions: Arc::clone(funcs)}),
+    Rule::assign => exec_statement(&parse_assign(item.into_inner(), &mut ctx), &mut ExecContext{stack: Vec::new(), functions: Arc::clone(funcs), classes: Arc::clone(classes)}),
+    Rule::funccall => exec_expr(&parse_funccall(item.into_inner(), &mut ctx), &mut ExecContext{stack: Vec::new(), functions: Arc::clone(funcs), classes: Arc::clone(classes)}),
     Rule::funcdef => {
       
       let mut comps = item.into_inner();
@@ -391,6 +477,12 @@ fn process_toplevel(pair: pest::iterators::Pair<Rule, pest::inputs::StrInput>, m
         Box::new(Function{formals: formals, code: Box::new(block), stack: ctx.stack.unwrap()}));
       Value::from_int(0)
     },
+    Rule::classdecl => {
+      let cls = parse_classdecl(item.into_inner(), &mut ctx);
+      let cname = cls.name.clone();
+      Arc::get_mut(classes).unwrap().insert(cls.name.clone(), Box::new(cls));
+      Value::from_str(cname)
+    }
     _ => Value::from_int(-1000000),
   }
 }
@@ -461,6 +553,7 @@ fn exec_expr(e: &Expression, ctx: &mut ExecContext) -> Value {
           EValue::Int(_ii) => Value::from_err("int cannot be indexed".to_string()),
           EValue::Str(data) => Value::from_int(data.clone().into_bytes()[i.as_int() as usize] as i32),
           EValue::Err(e) => Value::from_err(e.clone()),
+          EValue::Obj(o) => Value::from_err("objects cannot be indexed".to_string()),
           EValue::Vec(v) => if v.len() <= (i.as_int() as usize) || i.as_int() < 0 {
             Value::from_err("invalid index value".to_string())
           } else {
@@ -478,13 +571,23 @@ fn exec_expr(e: &Expression, ctx: &mut ExecContext) -> Value {
     },
     Expression::FunctionCall{ref function, ref args} => {
       //println!("Entering function {}", function);
-      let mut fctx = ExecContext{stack: Vec::new(), functions: Arc::clone(&ctx.functions)};
+      let mut fctx = ExecContext{stack: Vec::new(), functions: Arc::clone(&ctx.functions), classes: Arc::clone(&ctx.classes)};
       fctx.stack.resize(ctx.functions[function].stack.len(), Value::from_int(0));
       for i in 0..args.len() {
         fctx.stack[i] = exec_expr(&*args[i], ctx);
       }
       let ref f = ctx.functions[function];
       exec_block(f.deref().code.deref(), &mut fctx)
+    },
+    Expression::ObjDef{ref cls, ref init} => {
+      let ref class = ctx.classes[cls];
+      if class.fields.len() != init.len() {
+        Value::from_err(String::new() + "Initializer list has wrong size for " + cls)
+      } else {
+        let mut obj = Object::new(class);
+        
+        Value::from_obj(obj)
+      }
     }
   }
 }
@@ -518,6 +621,7 @@ fn main() {
   test_value();
   let mut state : HashMap<String, i32> = HashMap::new();
   let mut functions = Arc::new(Functions::new());
+  let mut classes = Arc::new(Classes::new());
   let stdin = io::stdin();
   loop {
     let mut line = String::new();
@@ -537,7 +641,7 @@ fn main() {
       /*for inner_pair in pair.into_inner() {
         println!("  Rule:    {:?}", inner_pair.as_rule());
       }*/
-      let val = process_toplevel(pair, &mut functions);
+      let val = process_toplevel(pair, &mut functions, &mut classes);
       println!("={:?}", val);
       for (k, v) in &state {
         println!("{} = {:?}", k, v);

@@ -13,8 +13,10 @@ funccall = { ident ~ "(" ~ exprlist ~ ")" }
 
 vardecl = { "var" ~ ident ~ "=" ~ expr}
 
+objdef = { ident ~ "{" ~ exprlist ~ "}" }
+
 array = { "[" ~ exprlist ~ "]" }
-expr = { (funccall | binary | number | ident | array | ( "(" ~ expr ~ ")" )) ~ ("[" ~ expr ~ "]")? }
+expr = { (objdef | funccall | binary | number | ident | array | ( "(" ~ expr ~ ")" )) ~ ("[" ~ expr ~ "]")? }
 statement = { vardecl | assign | IF | expr }
 binary = { (unary | ( "(" ~ expr ~ ")" )) ~ operator ~ expr }
 unary = _{ number | ident}
@@ -24,7 +26,9 @@ funcdef = { "func" ~ ident ~ "(" ~ identlist ~ ")" ~ block}
 
 IF = { "if" ~ expr ~ block ~ ( "else" ~ block )?}
 
+classdecl = { "class" ~ ident ~ "{" ~ ( ident ~ ";")* ~ "}" }
 
-toplevel = { funcdef | funccall | assign}
+
+toplevel = { funcdef | funccall | assign | classdecl}
 
 whitespace = _{ " " | "\t" | "\r" | "\n" }
