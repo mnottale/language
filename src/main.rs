@@ -389,7 +389,7 @@ fn parse_identchain(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInp
 
 fn parse_expr(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, ctx: &mut ParseContext) -> Expression {
   let content = pairs.next().unwrap();
-  let v = match content.as_rule() {
+  let mut v = match content.as_rule() {
       Rule::binary => parse_binary(content.into_inner(), ctx),
       Rule::funccall => parse_funccall(content.into_inner(), ctx),
       Rule::number => Expression::Constant(content.into_span().as_str().to_string().parse::<i32>().unwrap()),
@@ -402,10 +402,15 @@ fn parse_expr(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, c
       Rule::objdef => parse_objdef(content.into_inner(), ctx),
       _ => unreachable!(),
   };
-  match pairs.next() {
-    None => v,
-    Some(rule) => Expression::SubScript{v: Box::new(v), idx: Box::new(parse_expr(rule.into_inner(), ctx))},
-  }
+  // parse subsequents [expr] or .ident
+  for p in pairs {
+    v = match p.as_rule() {
+      Rule::ident => Expression::Dot{lhs: Box::new(v), rhs: p.into_span().as_str().to_string()},
+      Rule::expr => Expression::SubScript{v: Box::new(v), idx: Box::new(parse_expr(p.into_inner(), ctx))},
+      _ => unreachable!(),
+    }
+  };
+  v
 }
 
 fn parse_statement(pair: pest::iterators::Pair<Rule, pest::inputs::StrInput>, ctx: &mut ParseContext) -> Statement {
@@ -661,6 +666,8 @@ fn test_value() {
   }
 }
 
+use std::time::Instant;
+
 fn main() {
   test_value();
   let mut state : HashMap<String, i32> = HashMap::new();
@@ -685,8 +692,9 @@ fn main() {
       /*for inner_pair in pair.into_inner() {
         println!("  Rule:    {:?}", inner_pair.as_rule());
       }*/
+      let now = Instant::now();
       let val = process_toplevel(pair, &mut functions, &mut classes);
-      println!("={:?}", val);
+      println!("={:?}    in {:?}", val, Instant::now()-now);
       for (k, v) in &state {
         println!("{} = {:?}", k, v);
       }
@@ -696,9 +704,14 @@ fn main() {
 
 
 /*
+BASIC FIBO
 func fibo(x) { if x > 2 { (fibo(x-1))+(fibo(x-2));} else {x;};}
 
+FIBO ON OBJECT
 class obj{x;}
 func fibo(x) { if x.x > 2 { var va = fibo(obj{x.x-1}); var vb = fibo(obj{x.x-2});  obj{va.x+vb.x};} else {x;};}
-z=fibo(obj{1})
+func fibo(x) { if x.x > 2 { obj{(fibo(obj{x.x-1}).x) + fibo(obj{x.x-2}).x};} else {x;};}
+z=fibo(obj{34}): 6.1s
+python equivalent: 9s
+
 */

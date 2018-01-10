@@ -19,7 +19,7 @@ identchain = { ident ~ ( "." ~ ident)* }
 
 array = { "[" ~ exprlist ~ "]" }
 
-expr = { (objdef | funccall | binary | number | identchain | array | ( "(" ~ expr ~ ")" )) ~ ("[" ~ expr ~ "]")? }
+expr = { (objdef | funccall | binary | number | identchain | array | ( "(" ~ expr ~ ")" )) ~ ( ("[" ~ expr ~ "]") | ("." ~ ident))* }
 
 binary = { (number | identchain | ( "(" ~ expr ~ ")" )) ~ operator ~ expr }
 
