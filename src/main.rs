@@ -70,6 +70,7 @@ static TSHIFT:i32 = 48;
 static T_INT:u64 = 1;
 static T_STR:u64 = 2;
 static T_ARR:u64 = 3;
+static T_ERR:u64 = 4;
 
 type List = Vec<Value>;
 
@@ -77,6 +78,7 @@ type List = Vec<Value>;
 enum EValue {
   Int(i32),
   Str(&'static mut String),
+  Err(&'static mut String),
   Vec(&'static mut List),
 }
 
@@ -89,6 +91,10 @@ impl Value {
     let sptr = Box::into_raw(Box::new(val));
     Value{v: (T_STR << TSHIFT) + (sptr as u64)}
   }
+  fn from_err(val: String) -> Value {
+    let sptr = Box::into_raw(Box::new(val));
+    Value{v: (T_ERR << TSHIFT) + (sptr as u64)}
+  }
   fn from_vec(val: List) -> Value {
     let l =  Box::into_raw(Box::new(val));
     //println!("{:x}", l as u64);
@@ -100,6 +106,11 @@ impl Value {
     ((self.v &TMASK) >> TSHIFT)
   }
   fn as_str(& self) -> &'static mut String {
+    unsafe {
+      &mut*((self.v&AMASK) as *mut String)
+    }
+  }
+  fn as_err(& self) -> &'static mut String {
     unsafe {
       &mut*((self.v&AMASK) as *mut String)
     }
@@ -119,6 +130,7 @@ impl Value {
     let t = self.vtype();
     if t == T_INT { return EValue::Int(self.as_int()); }
     if t == T_STR { return EValue::Str(self.as_str()); }
+    if t == T_ERR { return EValue::Err(self.as_err()); }
     if t == T_ARR { return EValue::Vec(self.as_vec()); }
     unreachable!()
   }
@@ -127,6 +139,7 @@ impl Value {
       EValue::Int(i) => i != 0,
       EValue::Str(s) => s.len() != 0,
       EValue::Vec(v) => v.len() != 0,
+      EValue::Err(_e) => true,
     }
   }
 }
@@ -161,6 +174,9 @@ impl Clone for Value {
     if self.vtype() == T_STR {
       return Value::from_str(self.as_str().clone());
     }
+    if self.vtype() == T_ERR {
+      return Value::from_err(self.as_err().clone());
+    }
     if self.vtype() == T_INT {
       return Value{v: self.v};
     }
@@ -192,6 +208,7 @@ enum Expression {
   GlobalVariable(String),
   StackVariable(i32),
   Array(ExprList),
+  SubScript{v: Box<Expression>, idx: Box<Expression>},
   Operator{lhs: Box<Expression>, rhs: Box<Expression>, op: String},
   FunctionCall{function: String, args: Vec<Box<Expression>>},
 }
@@ -276,7 +293,7 @@ fn parse_identlist(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInpu
 
 fn parse_expr(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, ctx: &mut ParseContext) -> Expression {
   let content = pairs.next().unwrap();
-  match content.as_rule() {
+  let v = match content.as_rule() {
       Rule::binary => parse_binary(content.into_inner(), ctx),
       Rule::funccall => parse_funccall(content.into_inner(), ctx),
       Rule::number => Expression::Constant(content.into_span().as_str().to_string().parse::<i32>().unwrap()),
@@ -286,6 +303,10 @@ fn parse_expr(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, c
         Expression::Array(parse_exprlist(content.into_inner().next().unwrap().into_inner(), ctx))
       },
       _ => Expression::Constant(1000001),
+  };
+  match pairs.next() {
+    None => v,
+    Some(rule) => Expression::SubScript{v: Box::new(v), idx: Box::new(parse_expr(rule.into_inner(), ctx))},
   }
 }
 
@@ -429,12 +450,31 @@ fn exec_expr(e: &Expression, ctx: &mut ExecContext) -> Value {
       };
       Value::from_int(r)
     },
-    Expression::Array(ref exprlist) => {
-      let mut sum: i32 = 0;
-      for e in exprlist {
-        sum += exec_expr(e, ctx).as_int();
+    Expression::SubScript{ref v, ref idx} => {
+      let val = exec_expr(&*v, ctx);
+      let i = exec_expr(&*idx, ctx);
+      if i.vtype() != T_INT {
+       Value::from_err("index must be integer".to_string())
       }
-      Value::from_int(sum)
+      else {
+        match val.evalue() {
+          EValue::Int(_ii) => Value::from_err("int cannot be indexed".to_string()),
+          EValue::Str(data) => Value::from_int(data.clone().into_bytes()[i.as_int() as usize] as i32),
+          EValue::Err(e) => Value::from_err(e.clone()),
+          EValue::Vec(v) => if v.len() <= (i.as_int() as usize) || i.as_int() < 0 {
+            Value::from_err("invalid index value".to_string())
+          } else {
+            v[i.as_int() as usize].clone()
+          },
+        }
+      }
+    },
+    Expression::Array(ref exprlist) => {
+      let mut v = List::new();
+      for e in exprlist {
+        v.push(exec_expr(e, ctx));
+      }
+      Value::from_vec(v)
     },
     Expression::FunctionCall{ref function, ref args} => {
       //println!("Entering function {}", function);
