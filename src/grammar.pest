@@ -9,8 +9,6 @@ exprlist = { expr ? ~ ("," ~ expr)* }
 identlist = {ident ? ~ ("," ~ ident)*}
 assign = { identchain ~ "=" ~ expr }
 
-funccall = { ident ~ "(" ~ exprlist ~ ")" }
-
 vardecl = { "var" ~ ident ~ "=" ~ expr}
 
 objdef = { ident ~ "{" ~ exprlist ~ "}" }
@@ -19,7 +17,7 @@ identchain = { ident ~ ( "." ~ ident)* }
 
 array = { "[" ~ exprlist ~ "]" }
 
-expr = { (objdef | funccall | binary | number | identchain | array | ( "(" ~ expr ~ ")" )) ~ ( ("[" ~ expr ~ "]") | ("." ~ ident))* }
+expr = { (objdef | lambda | binary | number | identchain | array | ( "(" ~ expr ~ ")" )) ~ ( ("[" ~ expr ~ "]") | ("(" ~ exprlist ~ ")" ) | ("." ~ ident))* }
 
 binary = { (number | identchain | ( "(" ~ expr ~ ")" )) ~ operator ~ expr }
 
@@ -29,12 +27,12 @@ unary = _{ number | ident}
 block = { "{" ~ (statement ~ ";")* ~ "}" }
 
 funcdef = { "func" ~ ident ~ "(" ~ identlist ~ ")" ~ block}
-
+lambda = { "func" ~ "(" ~ identlist ~ ")" ~ block }
 IF = { "if" ~ expr ~ block ~ ( "else" ~ block )?}
 
 classdecl = { "class" ~ ident ~ "{" ~ ( ident ~ ";")* ~ "}" }
 
 
-toplevel = { funcdef | funccall | assign | classdecl}
+toplevel = { funcdef | assign | classdecl}
 
 whitespace = _{ " " | "\t" | "\r" | "\n" }

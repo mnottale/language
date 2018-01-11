@@ -72,6 +72,7 @@ static T_STR:u64 = 2;
 static T_ARR:u64 = 3;
 static T_ERR:u64 = 4;
 static T_OBJ:u64 = 5;
+static T_FUN:u64 = 6;
 
 type List = Vec<Value>;
 
@@ -82,6 +83,7 @@ enum EValue {
   Err(&'static mut String),
   Vec(&'static mut List),
   Obj(&'static mut Object),
+  Fun(&'static mut Function),
 }
 
 struct Object {
@@ -100,6 +102,12 @@ impl Object {
 impl Debug for Object {
   fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
    self.class.name.fmt(f)
+ }
+}
+
+impl Debug for Function {
+  fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+   "<func>".fmt(f)
  }
 }
 
@@ -129,6 +137,13 @@ impl Value {
     //println!("{:x}", cp as u64);
     Value{v: (T_OBJ << TSHIFT) + (cp as u64)}
   }
+  fn from_fun(val: Function) -> Value {
+    let l =  Box::into_raw(Box::new(val));
+    //println!("{:x}", l as u64);
+    let cp = Box::into_raw(Box::new((l as u64) | ((1 as u64) << TSHIFT)));
+    //println!("{:x}", cp as u64);
+    Value{v: (T_FUN << TSHIFT) + (cp as u64)}
+  }
   fn vtype(&self) -> u64 {
     ((self.v &TMASK) >> TSHIFT)
   }
@@ -151,11 +166,19 @@ impl Value {
     }
   }
   fn as_obj(&self) -> &'static mut Object {
-  unsafe {
+    unsafe {
       //println!("{:x}", self.v & AMASK);
       let cp = * ((self.v&AMASK) as *mut u64);
       //println!("{:x}", cp);
       &mut*((cp & AMASK) as *mut Object)
+    }
+  }
+  fn as_fun(&self) -> &'static mut Function {
+    unsafe {
+      //println!("{:x}", self.v & AMASK);
+      let cp = * ((self.v&AMASK) as *mut u64);
+      //println!("{:x}", cp);
+      &mut*((cp & AMASK) as *mut Function)
     }
   }
   fn as_int(& self) -> i32 {
@@ -168,6 +191,7 @@ impl Value {
     if t == T_ERR { return EValue::Err(self.as_err()); }
     if t == T_ARR { return EValue::Vec(self.as_vec()); }
     if t == T_OBJ { return EValue::Obj(self.as_obj()); }
+    if t == T_FUN { return EValue::Fun(self.as_fun()); }
     unreachable!()
   }
   fn to_bool(& self) -> bool {
@@ -177,6 +201,7 @@ impl Value {
       EValue::Vec(v) => v.len() != 0,
       EValue::Obj(_o) => true,
       EValue::Err(_e) => true,
+      EValue::Fun(_f) => true,
     }
   }
 }
@@ -218,6 +243,21 @@ impl Drop for Value {
         }
       }
     }
+    if self.vtype() == T_FUN {
+      // decrease refcount
+      unsafe {
+        let cp = * ((self.v&AMASK) as *mut u64);
+        let mut count = (cp & TMASK) >> TSHIFT;
+        count-= 1;
+        if count == 0 {
+          Box::from_raw((cp & AMASK) as *mut Function);
+          Box::from_raw((self.v&AMASK) as *mut u64);
+        }
+        else {
+          * ((self.v&AMASK) as *mut u64) -= 1 << TSHIFT;
+        }
+      }
+    }
   }
 }
 
@@ -246,6 +286,13 @@ impl Clone for Value {
         return Value{v: self.v};
       }
     }
+    if self.vtype() == T_FUN {
+      unsafe {
+        // increase refcount
+        * ((self.v&AMASK) as *mut u64) += 1 << TSHIFT;
+        return Value{v: self.v};
+      }
+    }
     unreachable!();
   }
 }
@@ -262,18 +309,21 @@ type Functions = HashMap<String, Box<Function>>;
 type ExprList = Vec<Box<Expression>>;
 type IdentList = Vec<String>;
 
+#[derive(Clone)]
 enum Expression {
   Constant(i32),
   GlobalVariable(String),
   StackVariable(i32),
   Array(ExprList),
+  Lambda(Box<Function>),
   Dot{lhs: Box<Expression>, rhs: String, cacheClass: *const Class, cacheIndex: i32},
   ObjDef{cls: String, init: Vec<Box<Expression>>},
   SubScript{v: Box<Expression>, idx: Box<Expression>},
   Operator{lhs: Box<Expression>, rhs: Box<Expression>, op: String},
-  FunctionCall{function: String, args: Vec<Box<Expression>>},
+  FunctionCall{function: Box<Expression>, args: Vec<Box<Expression>>},
 }
 
+#[derive(Clone)]
 enum Statement {
   GlobalAssignment{target: String, rhs: Box<Expression>},
   StackAssignment{target: i32, rhs: Box<Expression>},
@@ -290,12 +340,14 @@ struct Class {
   fields: HashMap<String, i32>,
 }
 
+#[derive(Clone)]
 struct Function {
   formals: Vec<String>,
   code: Box<Block>,
   stack: Box<Stack>,
 }
 
+#[derive(Clone)]
 struct Block {
   statements: Vec<Box<Statement>>,
 }
@@ -363,13 +415,6 @@ fn parse_binary(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>,
   return Expression::Operator{lhs: Box::new(v1), rhs: Box::new(v2), op: op.into_span().as_str().to_string()}
 }
 
-fn parse_funccall(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, ctx: &mut ParseContext) -> Expression {
-  let name = pairs.next().unwrap();
-  let eargs = pairs.next().unwrap();
-  let args = parse_exprlist(eargs.into_inner(), ctx);
-  return Expression::FunctionCall{args: args, function: name.into_span().as_str().to_string()};
-}
-
 fn parse_exprlist(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, ctx: &mut ParseContext) -> ExprList {
   let mut res = ExprList::new();
   for p in pairs {
@@ -401,7 +446,6 @@ fn parse_expr(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, c
   let content = pairs.next().unwrap();
   let mut v = match content.as_rule() {
       Rule::binary => parse_binary(content.into_inner(), ctx),
-      Rule::funccall => parse_funccall(content.into_inner(), ctx),
       Rule::number => Expression::Constant(content.into_span().as_str().to_string().parse::<i32>().unwrap()),
       Rule::ident =>  parse_variable(content.into_span().as_str().to_string(), ctx),
       Rule::identchain => parse_identchain(content.into_inner(), ctx),
@@ -410,13 +454,15 @@ fn parse_expr(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, c
         Expression::Array(parse_exprlist(content.into_inner().next().unwrap().into_inner(), ctx))
       },
       Rule::objdef => parse_objdef(content.into_inner(), ctx),
+      Rule::lambda => parse_lambda(content.into_inner(), ctx),
       _ => unreachable!(),
   };
-  // parse subsequents [expr] or .ident
+  // parse subsequents [expr] or .ident or (exprlist)
   for p in pairs {
     v = match p.as_rule() {
       Rule::ident => Expression::Dot{lhs: Box::new(v), rhs: p.into_span().as_str().to_string(), cacheClass: 0 as *const Class, cacheIndex:0},
       Rule::expr => Expression::SubScript{v: Box::new(v), idx: Box::new(parse_expr(p.into_inner(), ctx))},
+      Rule::exprlist => Expression::FunctionCall{function: Box::new(v), args: parse_exprlist(p.into_inner(), ctx)},
       _ => unreachable!(),
     }
   };
@@ -482,12 +528,24 @@ fn parse_block(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, 
   return Block{statements: res};
 }
 
+fn parse_lambda(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, ctx: &mut ParseContext) -> Expression {
+  let pformals = pairs.next().unwrap();
+  let formals = parse_identlist(pformals.into_inner(), ctx);
+  let mut stack = Stack::new();
+  for i in 0..formals.len() {
+    stack.insert(formals[i].clone(), i as i32);
+  }
+  let body = pairs.next().unwrap();
+  let mut newctx = ParseContext{stack: Some(Box::new(stack))};
+  let mut block = parse_block(body.into_inner(), &mut newctx);
+  Expression::Lambda(Box::new(Function{formals: formals, code: Box::new(block), stack: newctx.stack.unwrap()}))
+}
+
 fn process_toplevel(pair: pest::iterators::Pair<Rule, pest::inputs::StrInput>, mut funcs: &mut Arc<Functions>, mut classes: &mut Arc<Classes>) -> Value {
   let item = pair.into_inner().next().unwrap();
   let mut ctx: ParseContext = ParseContext{stack: None};
   match item.as_rule() {
     Rule::assign => exec_statement(&parse_assign(item.into_inner(), &mut ctx), &mut ExecContext{stack: Vec::new(), functions: Arc::clone(funcs), classes: Arc::clone(classes)}),
-    Rule::funccall => exec_expr(&parse_funccall(item.into_inner(), &mut ctx), &mut ExecContext{stack: Vec::new(), functions: Arc::clone(funcs), classes: Arc::clone(classes)}),
     Rule::funcdef => {
       
       let mut comps = item.into_inner();
@@ -608,6 +666,7 @@ fn exec_expr(e: &Expression, ctx: &mut ExecContext) -> Value {
           EValue::Int(_ii) => Value::from_err("int cannot be indexed".to_string()),
           EValue::Str(data) => Value::from_int(data.clone().into_bytes()[i.as_int() as usize] as i32),
           EValue::Err(e) => Value::from_err(e.clone()),
+          EValue::Fun(_o) => Value::from_err("functions cannot be indexed".to_string()),
           EValue::Obj(_o) => Value::from_err("objects cannot be indexed".to_string()),
           EValue::Vec(v) => if v.len() <= (i.as_int() as usize) || i.as_int() < 0 {
             Value::from_err("invalid index value".to_string())
@@ -626,13 +685,22 @@ fn exec_expr(e: &Expression, ctx: &mut ExecContext) -> Value {
     },
     Expression::FunctionCall{ref function, ref args} => {
       //println!("Entering function {}", function);
-      let mut fctx = ExecContext{stack: Vec::new(), functions: Arc::clone(&ctx.functions), classes: Arc::clone(&ctx.classes)};
-      fctx.stack.resize(ctx.functions[function].stack.len(), Value::from_int(0));
-      for i in 0..args.len() {
-        fctx.stack[i] = exec_expr(&*args[i], ctx);
+      let f = exec_expr(&*function, ctx);
+      match f.evalue() {
+        EValue::Fun(ref fun) => {
+          if fun.stack.len() != args.len() {
+            Value::from_err("wrong number of arguments".to_string())
+          } else {
+            let mut fctx = ExecContext{stack: Vec::new(), functions: Arc::clone(&ctx.functions), classes: Arc::clone(&ctx.classes)};
+            fctx.stack.resize(fun.stack.len(), Value::from_int(0));
+            for i in 0..args.len() {
+              fctx.stack[i] = exec_expr(&*args[i], ctx);
+            }
+            exec_block(&*fun.code, &mut fctx)
+          }
+        },
+        _ => Value::from_err("call of not a function".to_string()),
       }
-      let ref f = ctx.functions[function];
-      exec_block(f.deref().code.deref(), &mut fctx)
     },
     Expression::ObjDef{ref cls, ref init} => {
       if ctx.classes[cls].fields.len() != init.len() {
@@ -665,6 +733,9 @@ fn exec_expr(e: &Expression, ctx: &mut ExecContext) -> Value {
         },
         _ => Value::from_err("value left of '.' is not an object".to_string()),
       }
+    },
+    Expression::Lambda(ref f) => {
+      Value::from_fun((**f).clone())
     }
   }
 }
