@@ -23,6 +23,13 @@ use std::sync::Arc;
 use std::ops::Deref;
 use std::ops::DerefMut;
 
+use std::fmt::Debug;
+mod value;
+
+use value::Value;
+use value::EValue;
+
+use value::T_INT;
 
 lazy_static! {
   static ref variables : Mutex<HashMap<String, Value>> = Mutex::new(HashMap::new());
@@ -59,34 +66,13 @@ impl<T> Allocator<T> where T: Clone {
   }
 }
 
-struct Value {
-  v: u64,
-}
 
-static AMASK:u64 = 0x0000FFFFFFFFFFFF;
-static TMASK:u64 = 0xFFFF000000000000;
-static TSHIFT:i32 = 48;
-
-static T_INT:u64 = 1;
-static T_STR:u64 = 2;
-static T_ARR:u64 = 3;
-static T_ERR:u64 = 4;
-static T_OBJ:u64 = 5;
-static T_FUN:u64 = 6;
 
 type List = Vec<Value>;
 
-#[derive(Debug)]
-enum EValue {
-  Int(i32),
-  Str(&'static mut String),
-  Err(&'static mut String),
-  Vec(&'static mut List),
-  Obj(&'static mut Object),
-  Fun(&'static mut Function),
-}
 
-struct Object {
+
+pub struct Object {
   class: &'static Class,
   fields: Vec<Value>,
 }
@@ -111,199 +97,6 @@ impl Debug for Function {
  }
 }
 
-impl Value {
-  fn from_int(val: i32) -> Value {
-    Value{v: (T_INT << TSHIFT) + ((val as u32) as u64)}
-  }
-  fn from_str(val: String) -> Value {
-    let sptr = Box::into_raw(Box::new(val));
-    Value{v: (T_STR << TSHIFT) + (sptr as u64)}
-  }
-  fn from_err(val: String) -> Value {
-    let sptr = Box::into_raw(Box::new(val));
-    Value{v: (T_ERR << TSHIFT) + (sptr as u64)}
-  }
-  fn from_vec(val: List) -> Value {
-    let l =  Box::into_raw(Box::new(val));
-    //println!("{:x}", l as u64);
-    let cp = Box::into_raw(Box::new((l as u64) | ((1 as u64) << TSHIFT)));
-    //println!("{:x}", cp as u64);
-    Value{v: (T_ARR << TSHIFT) + (cp as u64)}
-  }
-  fn from_obj(val: Object) -> Value {
-    let l =  Box::into_raw(Box::new(val));
-    //println!("{:x}", l as u64);
-    let cp = Box::into_raw(Box::new((l as u64) | ((1 as u64) << TSHIFT)));
-    //println!("{:x}", cp as u64);
-    Value{v: (T_OBJ << TSHIFT) + (cp as u64)}
-  }
-  fn from_fun(val: Function) -> Value {
-    let l =  Box::into_raw(Box::new(val));
-    //println!("{:x}", l as u64);
-    let cp = Box::into_raw(Box::new((l as u64) | ((1 as u64) << TSHIFT)));
-    //println!("{:x}", cp as u64);
-    Value{v: (T_FUN << TSHIFT) + (cp as u64)}
-  }
-  fn vtype(&self) -> u64 {
-    ((self.v &TMASK) >> TSHIFT)
-  }
-  fn as_str(& self) -> &'static mut String {
-    unsafe {
-      &mut*((self.v&AMASK) as *mut String)
-    }
-  }
-  fn as_err(& self) -> &'static mut String {
-    unsafe {
-      &mut*((self.v&AMASK) as *mut String)
-    }
-  }
-  fn as_vec(& self) -> &'static mut List {
-    unsafe {
-      //println!("{:x}", self.v & AMASK);
-      let cp = * ((self.v&AMASK) as *mut u64);
-      //println!("{:x}", cp);
-      &mut*((cp & AMASK) as *mut List)
-    }
-  }
-  fn as_obj(&self) -> &'static mut Object {
-    unsafe {
-      //println!("{:x}", self.v & AMASK);
-      let cp = * ((self.v&AMASK) as *mut u64);
-      //println!("{:x}", cp);
-      &mut*((cp & AMASK) as *mut Object)
-    }
-  }
-  fn as_fun(&self) -> &'static mut Function {
-    unsafe {
-      //println!("{:x}", self.v & AMASK);
-      let cp = * ((self.v&AMASK) as *mut u64);
-      //println!("{:x}", cp);
-      &mut*((cp & AMASK) as *mut Function)
-    }
-  }
-  fn as_int(& self) -> i32 {
-    ((self.v & AMASK) as u32) as i32
-  }
-  fn evalue(& self) -> EValue {
-    let t = self.vtype();
-    if t == T_INT { return EValue::Int(self.as_int()); }
-    if t == T_STR { return EValue::Str(self.as_str()); }
-    if t == T_ERR { return EValue::Err(self.as_err()); }
-    if t == T_ARR { return EValue::Vec(self.as_vec()); }
-    if t == T_OBJ { return EValue::Obj(self.as_obj()); }
-    if t == T_FUN { return EValue::Fun(self.as_fun()); }
-    unreachable!()
-  }
-  fn to_bool(& self) -> bool {
-    match self.evalue() {
-      EValue::Int(i) => i != 0 as i32,
-      EValue::Str(s) => s.len() != 0,
-      EValue::Vec(v) => v.len() != 0,
-      EValue::Obj(_o) => true,
-      EValue::Err(_e) => true,
-      EValue::Fun(_f) => true,
-    }
-  }
-}
-
-impl Drop for Value {
-  fn drop(&mut self) {
-    if self.vtype() == T_STR {
-      unsafe {
-        Box::from_raw( (self.v & AMASK) as *mut String);
-      }
-    }
-    if self.vtype() == T_ARR {
-      // decrease refcount
-      unsafe {
-        let cp = * ((self.v&AMASK) as *mut u64);
-        let mut count = (cp & TMASK) >> TSHIFT;
-        count-= 1;
-        if count == 0 {
-          Box::from_raw((cp & AMASK) as *mut List);
-          Box::from_raw((self.v&AMASK) as *mut u64);
-        }
-        else {
-          * ((self.v&AMASK) as *mut u64) -= 1 << TSHIFT;
-        }
-      }
-    }
-    if self.vtype() == T_OBJ {
-      // decrease refcount
-      unsafe {
-        let cp = * ((self.v&AMASK) as *mut u64);
-        let mut count = (cp & TMASK) >> TSHIFT;
-        count-= 1;
-        if count == 0 {
-          Box::from_raw((cp & AMASK) as *mut Object);
-          Box::from_raw((self.v&AMASK) as *mut u64);
-        }
-        else {
-          * ((self.v&AMASK) as *mut u64) -= 1 << TSHIFT;
-        }
-      }
-    }
-    if self.vtype() == T_FUN {
-      // decrease refcount
-      unsafe {
-        let cp = * ((self.v&AMASK) as *mut u64);
-        let mut count = (cp & TMASK) >> TSHIFT;
-        count-= 1;
-        if count == 0 {
-          Box::from_raw((cp & AMASK) as *mut Function);
-          Box::from_raw((self.v&AMASK) as *mut u64);
-        }
-        else {
-          * ((self.v&AMASK) as *mut u64) -= 1 << TSHIFT;
-        }
-      }
-    }
-  }
-}
-
-impl Clone for Value {
-  fn clone(&self) -> Value {
-    if self.vtype() == T_STR {
-      return Value::from_str(self.as_str().clone());
-    }
-    if self.vtype() == T_ERR {
-      return Value::from_err(self.as_err().clone());
-    }
-    if self.vtype() == T_INT {
-      return Value{v: self.v};
-    }
-    if self.vtype() == T_ARR {
-      unsafe {
-        // increase refcount
-        * ((self.v&AMASK) as *mut u64) += 1 << TSHIFT;
-        return Value{v: self.v};
-      }
-    }
-    if self.vtype() == T_OBJ {
-      unsafe {
-        // increase refcount
-        * ((self.v&AMASK) as *mut u64) += 1 << TSHIFT;
-        return Value{v: self.v};
-      }
-    }
-    if self.vtype() == T_FUN {
-      unsafe {
-        // increase refcount
-        * ((self.v&AMASK) as *mut u64) += 1 << TSHIFT;
-        return Value{v: self.v};
-      }
-    }
-    unreachable!();
-  }
-}
-
-use std::fmt::Debug;
-
-impl Debug for Value {
- fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
-   self.evalue().fmt(f)
- }
-}
 
 type Functions = HashMap<String, Box<Function>>;
 type ExprList = Vec<Box<Expression>>;
@@ -341,10 +134,13 @@ struct Class {
 }
 
 #[derive(Clone)]
-struct Function {
+pub struct Function {
   formals: Vec<String>,
   code: Box<Block>,
   stack: Box<Stack>,
+  closureBuild: Vec<i32>, // parent stack indexes
+  closurePut: Vec<i32>, // stack index where to put closed values
+  closure: Vec<Value>,
 }
 
 #[derive(Clone)]
@@ -354,6 +150,8 @@ struct Block {
 
 struct ParseContext {
   stack: Option<Box<Stack>>,
+  parentStack: Option<Box<Stack>>,
+  close: HashMap<i32, i32>, // parent stack index -> self stack index
 }
 
 type Classes = HashMap<String, Box<Class>>;
@@ -388,9 +186,23 @@ fn parse_classdecl(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInpu
 fn parse_variable(name: String, ctx: &mut ParseContext) -> Expression {
   match ctx.stack {
     None => Expression::GlobalVariable(name),
-    Some(ref bcf) => match bcf.deref().get(&name) {
-      None => Expression::GlobalVariable(name),
-      Some(idx) => Expression::StackVariable(*idx)
+    Some(ref mut bcf) => {
+      match bcf.get(&name) {
+        Some(idx) => {return Expression::StackVariable(*idx);}
+        _ => {}
+      }
+      match ctx.parentStack {
+        None => Expression::GlobalVariable(name),
+        Some(ref pstack) => match pstack.get(&name) {
+          None => Expression::GlobalVariable(name),
+          Some(idx) => {
+            let sidx = bcf.len() as i32;
+            bcf.insert(name.clone(), sidx);
+            ctx.close.insert(*idx, sidx);
+            Expression::StackVariable(sidx)
+          }
+        }
+      }
     }
   }
 }
@@ -536,14 +348,27 @@ fn parse_lambda(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>,
     stack.insert(formals[i].clone(), i as i32);
   }
   let body = pairs.next().unwrap();
-  let mut newctx = ParseContext{stack: Some(Box::new(stack))};
+  let mut newctx = ParseContext{stack: Some(Box::new(stack)), parentStack: ctx.stack.clone(), close: HashMap::new()};
   let mut block = parse_block(body.into_inner(), &mut newctx);
-  Expression::Lambda(Box::new(Function{formals: formals, code: Box::new(block), stack: newctx.stack.unwrap()}))
+  let mut closureBuild = Vec::new();
+  let mut closurePut = Vec::new();
+  for (p, s) in newctx.close {
+    closureBuild.push(p);
+    closurePut.push(s);
+  }
+  Expression::Lambda(Box::new(Function{
+      formals: formals,
+      code: Box::new(block),
+      stack: newctx.stack.unwrap(),
+      closureBuild: closureBuild,
+      closurePut: closurePut,
+      closure: Vec::new(),
+  }))
 }
 
 fn process_toplevel(pair: pest::iterators::Pair<Rule, pest::inputs::StrInput>, mut funcs: &mut Arc<Functions>, mut classes: &mut Arc<Classes>) -> Value {
   let item = pair.into_inner().next().unwrap();
-  let mut ctx: ParseContext = ParseContext{stack: None};
+  let mut ctx: ParseContext = ParseContext{stack: None, parentStack: None, close: HashMap::new()};
   match item.as_rule() {
     Rule::assign => exec_statement(&parse_assign(item.into_inner(), &mut ctx), &mut ExecContext{stack: Vec::new(), functions: Arc::clone(funcs), classes: Arc::clone(classes)}),
     Rule::funcdef => {
@@ -560,7 +385,7 @@ fn process_toplevel(pair: pest::iterators::Pair<Rule, pest::inputs::StrInput>, m
       let body = comps.next().unwrap();
       let mut block = parse_block(body.into_inner(), &mut ctx);
       Arc::get_mut(&mut funcs).unwrap().insert(name.clone().into_span().as_str().to_string(),
-        Box::new(Function{formals: formals, code: Box::new(block), stack: ctx.stack.unwrap()}));
+        Box::new(Function{formals: formals, code: Box::new(block), stack: ctx.stack.unwrap(), closure: Vec::new(), closureBuild:Vec::new(), closurePut: Vec::new()}));
       Value::from_int(0)
     },
     Rule::classdecl => {
@@ -688,13 +513,16 @@ fn exec_expr(e: &Expression, ctx: &mut ExecContext) -> Value {
       let f = exec_expr(&*function, ctx);
       match f.evalue() {
         EValue::Fun(ref fun) => {
-          if fun.stack.len() != args.len() {
+          if fun.formals.len() != args.len() {
             Value::from_err("wrong number of arguments".to_string())
           } else {
             let mut fctx = ExecContext{stack: Vec::new(), functions: Arc::clone(&ctx.functions), classes: Arc::clone(&ctx.classes)};
             fctx.stack.resize(fun.stack.len(), Value::from_int(0));
             for i in 0..args.len() {
               fctx.stack[i] = exec_expr(&*args[i], ctx);
+            }
+            for i in 0..fun.closure.len() {
+              fctx.stack[fun.closurePut[i] as usize] = fun.closure[i].clone();
             }
             exec_block(&*fun.code, &mut fctx)
           }
@@ -735,7 +563,11 @@ fn exec_expr(e: &Expression, ctx: &mut ExecContext) -> Value {
       }
     },
     Expression::Lambda(ref f) => {
-      Value::from_fun((**f).clone())
+      let mut func = (**f).clone();
+      for i in func.closureBuild.clone() /*DF?*/ {
+        func.closure.push(ctx.stack[i as usize].clone());
+      }
+      Value::from_fun(func)
     }
   }
 }
