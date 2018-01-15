@@ -1,0 +1,29 @@
+
+use Functions;
+use value::{Value,EValue};
+use callable::Callable;
+use callable::Convertible;
+
+fn len(v: Value) -> i32 {
+  match v.evalue() {
+    EValue::Int(_v) => 1,
+    EValue::Str(s) => s.len() as i32,
+    EValue::Err(_e) => 1,
+    EValue::Vec(v) => v.len() as i32,
+    EValue::Obj(_o) => 1,
+    EValue::Fun(_f) => 1,
+    EValue::Pri(_p) => 1,
+  }
+}
+
+fn reversed(v: Vec<Value>) -> Vec<Value> {
+  let mut r = v.clone();
+  r.reverse();
+  r
+}
+
+
+pub fn load_stdlib(fs: &mut Functions) {
+  fs.insert("len".to_string(), Value::from_pri(Box::new(len as fn(Value) -> i32)));
+  fs.insert("reversed".to_string(), Value::from_pri(Box::new(reversed as fn(Vec<Value>) -> Vec<Value>)));
+}

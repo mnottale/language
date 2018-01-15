@@ -31,6 +31,12 @@ use value::EValue;
 
 use value::T_INT;
 
+mod callable;
+use callable::Callable;
+
+mod libstdlib;
+use libstdlib::load_stdlib;
+
 lazy_static! {
   static ref variables : Mutex<HashMap<String, Value>> = Mutex::new(HashMap::new());
   static ref arrays : Mutex<Allocator<Vec<Value>>> = Mutex::new(Allocator::new(Vec::new()));
@@ -98,7 +104,7 @@ impl Debug for Function {
 }
 
 
-type Functions = HashMap<String, Box<Function>>;
+type Functions = HashMap<String, Value>;
 type ExprList = Vec<Box<Expression>>;
 type IdentList = Vec<String>;
 
@@ -503,6 +509,7 @@ fn exec_expr(e: &Expression, ctx: &mut ExecContext) -> Value {
           EValue::Str(data) => Value::from_int(data.clone().into_bytes()[i.as_int() as usize] as i32),
           EValue::Err(e) => Value::from_err(e.clone()),
           EValue::Fun(_o) => Value::from_err("functions cannot be indexed".to_string()),
+          EValue::Pri(_o) => Value::from_err("primitives cannot be indexed".to_string()),
           EValue::Obj(_o) => Value::from_err("objects cannot be indexed".to_string()),
           EValue::Vec(v) => if v.len() <= (i.as_int() as usize) || i.as_int() < 0 {
             Value::from_err("invalid index value".to_string())
@@ -538,6 +545,13 @@ fn exec_expr(e: &Expression, ctx: &mut ExecContext) -> Value {
             exec_block(&*fun.code, &mut fctx)
           }
         },
+        EValue::Pri(ref c) => {
+          let mut a = Vec::new();
+          for i in 0..args.len() {
+              a.push(exec_expr(&*args[i], ctx));
+          }
+          c.call(a)
+        }
         EValue::Vec(ref v) => {
           let fun = v[0].as_fun();
           if fun.formals.len() != args.len() + v.len()-1 {
@@ -638,6 +652,7 @@ fn main() {
   test_value();
   let mut state : HashMap<String, i32> = HashMap::new();
   let mut functions = Arc::new(Functions::new());
+  load_stdlib(&mut variables.lock().unwrap());
   let mut classes = Arc::new(Classes::new());
   let stdin = io::stdin();
   loop {

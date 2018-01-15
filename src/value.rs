@@ -2,6 +2,7 @@
 use std;
 use std::fmt::Debug;
 use std::fmt::Formatter;
+use callable::Callable;
 
 #[derive(Debug)]
 pub enum EValue {
@@ -11,6 +12,7 @@ pub enum EValue {
   Vec(&'static mut List),
   Obj(&'static mut Object),
   Fun(&'static mut Function),
+  Pri(&'static Callable),
 }
 
 pub struct Value {
@@ -31,7 +33,9 @@ pub static T_ARR:u64 = 3;
 pub static T_ERR:u64 = 4;
 pub static T_OBJ:u64 = 5;
 pub static T_FUN:u64 = 6;
+pub static T_PRI:u64 = 7;
 
+use std::ops::Deref;
 
 impl Value {
   pub fn from_int(val: i32) -> Value {
@@ -65,6 +69,14 @@ impl Value {
     let cp = Box::into_raw(Box::new((l as u64) | ((1 as u64) << TSHIFT)));
     //println!("{:x}", cp as u64);
     Value{v: (T_FUN << TSHIFT) + (cp as u64)}
+  }
+  pub fn from_pri(val: Box<Callable>) -> Value {
+    //let b:Box<Callable> = Box::new(*val);
+    let l = Box::into_raw(Box::new(val));
+    //println!("{:x}", l as u64);
+    let cp = Box::into_raw(Box::new((l as u64) | ((1 as u64) << TSHIFT)));
+    //println!("{:x}", cp as u64);
+    Value{v: (T_PRI << TSHIFT) + (cp as u64)}
   }
   pub fn vtype(&self) -> u64 {
     ((self.v &TMASK) >> TSHIFT)
@@ -103,6 +115,16 @@ impl Value {
       &mut*((cp & AMASK) as *mut Function)
     }
   }
+  pub fn as_pri(&self) -> &'static Callable {
+  unsafe {
+      //println!("{:x}", self.v & AMASK);
+      let cp = * ((self.v&AMASK) as *mut u64);
+      //println!("{:x}", cp);
+      let b = &mut*((cp & AMASK) as *mut Box<Callable>);
+      let c = b.deref().deref() as *const Callable;
+      &*c
+    }
+  }
   pub fn as_int(& self) -> i32 {
     ((self.v & AMASK) as u32) as i32
   }
@@ -114,6 +136,7 @@ impl Value {
     if t == T_ARR { return EValue::Vec(self.as_vec()); }
     if t == T_OBJ { return EValue::Obj(self.as_obj()); }
     if t == T_FUN { return EValue::Fun(self.as_fun()); }
+    if t == T_PRI { return EValue::Pri(self.as_pri()); }
     unreachable!()
   }
   pub fn to_bool(& self) -> bool {
@@ -124,6 +147,7 @@ impl Value {
       EValue::Obj(_o) => true,
       EValue::Err(_e) => true,
       EValue::Fun(_f) => true,
+      EValue::Pri(_p) => true,
     }
   }
 }
@@ -180,6 +204,21 @@ impl Drop for Value {
         }
       }
     }
+    if self.vtype() == T_PRI {
+      // decrease refcount
+      unsafe {
+        let cp = * ((self.v&AMASK) as *mut u64);
+        let mut count = (cp & TMASK) >> TSHIFT;
+        count-= 1;
+        if count == 0 {
+          Box::from_raw((cp & AMASK) as *mut Box<Callable>);
+          Box::from_raw((self.v&AMASK) as *mut u64);
+        }
+        else {
+          * ((self.v&AMASK) as *mut u64) -= 1 << TSHIFT;
+        }
+      }
+    }
   }
 }
 
@@ -209,6 +248,13 @@ impl Clone for Value {
       }
     }
     if self.vtype() == T_FUN {
+      unsafe {
+        // increase refcount
+        * ((self.v&AMASK) as *mut u64) += 1 << TSHIFT;
+        return Value{v: self.v};
+      }
+    }
+    if self.vtype() == T_PRI {
       unsafe {
         // increase refcount
         * ((self.v&AMASK) as *mut u64) += 1 << TSHIFT;
