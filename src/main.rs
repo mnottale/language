@@ -131,6 +131,7 @@ type Stack = HashMap<String, i32>;
 struct Class {
   name: String,
   fields: HashMap<String, i32>,
+  funcs: HashMap<String, Value>,
 }
 
 #[derive(Clone)]
@@ -180,7 +181,7 @@ fn parse_classdecl(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInpu
     let l = fields.len();
     fields.insert(fname, l as i32);
   }
-  Class{name: name, fields: fields}
+  Class{name: name, fields: fields, funcs: HashMap::new()}
 }
 
 fn parse_variable(name: String, ctx: &mut ParseContext) -> Expression {
@@ -371,10 +372,13 @@ fn process_toplevel(pair: pest::iterators::Pair<Rule, pest::inputs::StrInput>, m
   let mut ctx: ParseContext = ParseContext{stack: None, parentStack: None, close: HashMap::new()};
   match item.as_rule() {
     Rule::assign => exec_statement(&parse_assign(item.into_inner(), &mut ctx), &mut ExecContext{stack: Vec::new(), functions: Arc::clone(funcs), classes: Arc::clone(classes)}),
-    Rule::funcdef => {
+    Rule::memfuncdef => {
       
       let mut comps = item.into_inner();
-      let name = comps.next().unwrap();
+      let rcname = comps.next().unwrap();
+      let cname = rcname.into_span().as_str().to_string();
+      let rname = comps.next().unwrap();
+      let name = rname.into_span().as_str().to_string();
       let pformals = comps.next().unwrap();
       let formals = parse_identlist(pformals.into_inner(), &mut ctx);
       let mut stack = Stack::new();
@@ -384,8 +388,15 @@ fn process_toplevel(pair: pest::iterators::Pair<Rule, pest::inputs::StrInput>, m
       ctx.stack = Some(Box::new(stack));
       let body = comps.next().unwrap();
       let mut block = parse_block(body.into_inner(), &mut ctx);
-      Arc::get_mut(&mut funcs).unwrap().insert(name.clone().into_span().as_str().to_string(),
-        Box::new(Function{formals: formals, code: Box::new(block), stack: ctx.stack.unwrap(), closure: Vec::new(), closureBuild:Vec::new(), closurePut: Vec::new()}));
+      let vf = Value::from_fun(Function{
+        formals: formals,
+        code: Box::new(block),
+        stack: ctx.stack.unwrap(),
+        closure: Vec::new(),
+        closureBuild:Vec::new(),
+        closurePut: Vec::new()
+      });
+      Arc::get_mut(&mut classes).unwrap().get_mut(&cname).unwrap().funcs.insert(name, vf);
       Value::from_int(0)
     },
     Rule::classdecl => {
@@ -527,6 +538,25 @@ fn exec_expr(e: &Expression, ctx: &mut ExecContext) -> Value {
             exec_block(&*fun.code, &mut fctx)
           }
         },
+        EValue::Vec(ref v) => {
+          let fun = v[0].as_fun();
+          if fun.formals.len() != args.len() + v.len()-1 {
+            Value::from_err("wrong number of arguments".to_string())
+          } else {
+            let mut fctx = ExecContext{stack: Vec::new(), functions: Arc::clone(&ctx.functions), classes: Arc::clone(&ctx.classes)};
+            fctx.stack.resize(fun.stack.len(), Value::from_int(0));
+            for i in 1..v.len() {
+              fctx.stack[i-1] = v[i].clone();
+            }
+            for i in 0..args.len() {
+              fctx.stack[i+v.len()-1] = exec_expr(&*args[i], ctx);
+            }
+            for i in 0..fun.closure.len() {
+              fctx.stack[fun.closurePut[i] as usize] = fun.closure[i].clone();
+            }
+            exec_block(&*fun.code, &mut fctx)
+          }
+        }
         _ => Value::from_err("call of not a function".to_string()),
       }
     },
@@ -553,8 +583,13 @@ fn exec_expr(e: &Expression, ctx: &mut ExecContext) -> Value {
               Some(idx) => {
                 *bearclaw(cacheClass) = o.class;
                 *bearclaw(cacheIndex) = *idx;
-                o.fields[*idx as usize].clone()
+                return o.fields[*idx as usize].clone();
               },
+              None => {}
+            }
+            // try functions
+            match o.class.funcs.get(rhs) {
+              Some(ref f) => Value::from_vec(vec![(*f).clone(), val.clone()]),
               None => Value::from_err(String::new() + "missing field: " + rhs),
             }
           }

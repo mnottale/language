@@ -26,13 +26,13 @@ statement = { vardecl | assign | IF | expr }
 unary = _{ number | ident}
 block = { "{" ~ (statement ~ ";")* ~ "}" }
 
-funcdef = { "func" ~ ident ~ "(" ~ identlist ~ ")" ~ block}
+memfuncdef = { "func" ~ ident ~ "::" ~ ident ~ "(" ~ identlist ~ ")" ~ block}
 lambda = { "func" ~ "(" ~ identlist ~ ")" ~ block }
 IF = { "if" ~ expr ~ block ~ ( "else" ~ block )?}
 
 classdecl = { "class" ~ ident ~ "{" ~ ( ident ~ ";")* ~ "}" }
 
 
-toplevel = { funcdef | assign | classdecl}
+toplevel = { memfuncdef | assign | classdecl}
 
 whitespace = _{ " " | "\t" | "\r" | "\n" }
