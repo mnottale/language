@@ -22,8 +22,17 @@ fn reversed(v: Vec<Value>) -> Vec<Value> {
   r
 }
 
+fn push(v: Value, what: Value) -> Value {
+  match v.evalue() {
+    EValue::Vec(v) => v.push(what),
+    _ => {}
+  };
+  v
+}
+
 
 pub fn load_stdlib(fs: &mut Functions) {
   fs.insert("len".to_string(), Value::from_pri(Box::new(len as fn(Value) -> i32)));
   fs.insert("reversed".to_string(), Value::from_pri(Box::new(reversed as fn(Vec<Value>) -> Vec<Value>)));
+  fs.insert("push".to_string(), Value::from_pri(Box::new(push as fn(Value, Value) -> Value)));
 }

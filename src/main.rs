@@ -128,6 +128,7 @@ enum Statement {
   StackAssignment{target: i32, rhs: Box<Expression>},
   ObjAssignment{target: Box<Expression>, slot: String, rhs: Box<Expression>, cacheClass: *const Class, cacheIndex: i32},
   If{cond: Box<Expression>, block: Box<Block>, blockelse: Option<Box<Block>>},
+  While{cond: Box<Expression>, block: Box<Block>},
   Expression(Box<Expression>),
 }
 
@@ -295,6 +296,7 @@ fn parse_statement(pair: pest::iterators::Pair<Rule, pest::inputs::StrInput>, ct
   match inner_pair.as_rule() {
     Rule::assign => parse_assign(inner_pair.into_inner(), ctx),
     Rule::IF => parse_if(inner_pair.into_inner(), ctx),
+    Rule::WHILE => parse_while(inner_pair.into_inner(), ctx),
     Rule::expr => Statement::Expression(Box::new(parse_expr(inner_pair.into_inner(), ctx))),
     Rule::vardecl => {
       let mut vd = inner_pair.into_inner();
@@ -311,6 +313,13 @@ fn parse_statement(pair: pest::iterators::Pair<Rule, pest::inputs::StrInput>, ct
   }
 }
 
+fn parse_while(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, ctx: &mut ParseContext) -> Statement {
+  let expr = pairs.next().unwrap();
+  let block = pairs.next().unwrap();
+  let cond =  parse_expr(expr.into_inner(), ctx);
+  let block = parse_block(block.into_inner(), ctx);
+  Statement::While{cond: Box::new(cond), block: Box::new(block)}
+}
 
 fn parse_if(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, ctx: &mut ParseContext) -> Statement {
   let expr = pairs.next().unwrap();
@@ -444,6 +453,18 @@ fn exec_statement(s: &Statement, ctx: &mut ExecContext) -> Value {
         }
       }
     },
+    Statement::While{ref cond, ref block} => {
+      let mut val = Value::from_int(0);
+      while true {
+        let cond = exec_expr(&*cond, ctx);
+        match cond.to_bool() {
+          false => return val,
+          true => val = exec_block(&*block, ctx),
+        }
+      }
+      val
+    }
+    
     Statement::ObjAssignment{ref target, ref slot, ref rhs, ref cacheClass, ref cacheIndex} => {
       let tgt = exec_expr(&*target, ctx);
       let v = exec_expr(&*rhs, ctx);

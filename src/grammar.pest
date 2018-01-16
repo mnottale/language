@@ -22,13 +22,14 @@ expr = { (objdef | lambda | binary | number | identchain | array | ( "(" ~ expr 
 binary = { (number | identchain | ( "(" ~ expr ~ ")" )) ~ operator ~ expr }
 
 
-statement = { vardecl | assign | IF | expr }
+statement = { vardecl | assign | IF | WHILE | expr }
 unary = _{ number | ident}
 block = { "{" ~ (statement ~ ";")* ~ "}" }
 
 memfuncdef = { "func" ~ ident ~ "::" ~ ident ~ "(" ~ identlist ~ ")" ~ block}
 lambda = { "func" ~ "(" ~ identlist ~ ")" ~ block }
 IF = { "if" ~ expr ~ block ~ ( "else" ~ block )?}
+WHILE = { "while" ~ expr ~ block }
 
 classdecl = { "class" ~ ident ~ "{" ~ ( ident ~ ";")* ~ "}" }
 
