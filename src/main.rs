@@ -99,8 +99,20 @@ impl Debug for Object {
 
 impl Debug for Function {
   fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
-   "<func>".fmt(f)
+   "<func>".fmt(f);
+   self.code.fmt(f)
  }
+}
+
+impl Debug for Block {
+  fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+    self.statements.fmt(f)
+    /*
+    for i in 0..self.statements.len() {
+      self[i].fmt(f)
+    }
+    Result::Ok(())*/
+  }
 }
 
 
@@ -108,7 +120,7 @@ type Functions = HashMap<String, Value>;
 type ExprList = Vec<Box<Expression>>;
 type IdentList = Vec<String>;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 enum Expression {
   Constant(i32),
   GlobalVariable(String),
@@ -122,13 +134,14 @@ enum Expression {
   FunctionCall{function: Box<Expression>, args: Vec<Box<Expression>>},
 }
 
-#[derive(Clone)]
+#[derive(Clone,Debug)]
 enum Statement {
   GlobalAssignment{target: String, rhs: Box<Expression>},
   StackAssignment{target: i32, rhs: Box<Expression>},
   ObjAssignment{target: Box<Expression>, slot: String, rhs: Box<Expression>, cacheClass: *const Class, cacheIndex: i32},
   If{cond: Box<Expression>, block: Box<Block>, blockelse: Option<Box<Block>>},
   While{cond: Box<Expression>, block: Box<Block>},
+  Block(Box<Block>),
   Expression(Box<Expression>),
 }
 
@@ -160,6 +173,9 @@ struct ParseContext {
   stack: Option<Box<Stack>>,
   parentStack: Option<Box<Stack>>,
   close: HashMap<i32, i32>, // parent stack index -> self stack index
+  expressions: HashMap<String, Box<Expression>>, // for parametric asts
+  statements: HashMap<String, Box<Statement>>,
+  identifiers: HashMap<String, String>,
 }
 
 type Classes = HashMap<String, Box<Class>>;
@@ -191,7 +207,10 @@ fn parse_classdecl(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInpu
   Class{name: name, fields: fields, funcs: HashMap::new()}
 }
 
-fn parse_variable(name: String, ctx: &mut ParseContext) -> Expression {
+fn parse_variable(mut name: String, ctx: &mut ParseContext) -> Expression {
+  if name.get(0..1).unwrap() == "%" {
+    name = ctx.identifiers[&name].clone();
+  }
   match ctx.stack {
     None => Expression::GlobalVariable(name),
     Some(ref mut bcf) => {
@@ -275,6 +294,10 @@ fn parse_expr(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, c
       },
       Rule::objdef => parse_objdef(content.into_inner(), ctx),
       Rule::lambda => parse_lambda(content.into_inner(), ctx),
+      Rule::parametric => {
+        let pname = content.into_span().as_str().to_string();
+        (*ctx.expressions[&pname]).clone()
+      },
       _ => unreachable!(),
   };
   // parse subsequents [expr] or .ident or (exprlist)
@@ -294,13 +317,19 @@ fn parse_statement(pair: pest::iterators::Pair<Rule, pest::inputs::StrInput>, ct
   //println!("  Rule:    {:?}", inner_pair.as_rule());
   //process_statement(inner_pair, &mut state);
   match inner_pair.as_rule() {
+    Rule::block => Statement::Block(Box::new(parse_block(inner_pair.into_inner(), ctx))),
     Rule::assign => parse_assign(inner_pair.into_inner(), ctx),
     Rule::IF => parse_if(inner_pair.into_inner(), ctx),
     Rule::WHILE => parse_while(inner_pair.into_inner(), ctx),
+    Rule::FORINT => parse_forint(inner_pair.into_inner(), ctx),
     Rule::expr => Statement::Expression(Box::new(parse_expr(inner_pair.into_inner(), ctx))),
     Rule::vardecl => {
       let mut vd = inner_pair.into_inner();
-      let ident = vd.next().unwrap().into_span().as_str().to_string();
+      let mut ident = vd.next().unwrap().into_span().as_str().to_string();
+      if ident.get(0..1).unwrap() == "%" {
+        println!("PARAMETRIC {}", ident);
+        ident = ctx.identifiers[&ident].clone();
+      }
       let mut idx = 0;
       match ctx.stack {
         None => {},
@@ -308,7 +337,11 @@ fn parse_statement(pair: pest::iterators::Pair<Rule, pest::inputs::StrInput>, ct
       };
       let rhs = parse_expr(vd.next().unwrap().into_inner(), ctx);
       Statement::StackAssignment{target: idx as i32, rhs: Box::new(rhs)}
-    }
+    },
+    Rule::parametric => {
+      let pname = inner_pair.into_span().as_str().to_string();
+      (*ctx.statements[&pname]).clone()
+    },
     other => {println!("Unhandled:    {:?}", other); Statement::Expression(Box::new(Expression::Constant(100000)))},
   }
 }
@@ -319,6 +352,25 @@ fn parse_while(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, 
   let cond =  parse_expr(expr.into_inner(), ctx);
   let block = parse_block(block.into_inner(), ctx);
   Statement::While{cond: Box::new(cond), block: Box::new(block)}
+}
+
+fn parse_forint(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, ctx: &mut ParseContext) -> Statement {
+  let ident = pairs.next().unwrap().into_span().as_str().to_string();
+  let limit = parse_expr(pairs.next().unwrap().into_inner(), ctx);
+  match ctx.stack {
+    Some(ref mut s) => {
+      let l = s.len();
+      s.insert(ident.clone(), l as i32);
+    },
+    _ => {}
+  }
+  let block = parse_block(pairs.next().unwrap().into_inner(), ctx);
+  let p = "{%v = 0; while %v < $e { $b; %v = %v + 1;};}";
+  let rule = LParser::parse_str(Rule::block, p);
+  ctx.expressions.insert("$e".to_string(), Box::new(limit));
+  ctx.statements.insert("$b".to_string(), Box::new(Statement::Block(Box::new(block))));
+  ctx.identifiers.insert("%v".to_string(), ident);
+  Statement::Block(Box::new(parse_block(rule.unwrap().next().unwrap().into_inner(), ctx)))
 }
 
 fn parse_if(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, ctx: &mut ParseContext) -> Statement {
@@ -364,7 +416,7 @@ fn parse_lambda(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>,
     stack.insert(formals[i].clone(), i as i32);
   }
   let body = pairs.next().unwrap();
-  let mut newctx = ParseContext{stack: Some(Box::new(stack)), parentStack: ctx.stack.clone(), close: HashMap::new()};
+  let mut newctx = ParseContext{stack: Some(Box::new(stack)), parentStack: ctx.stack.clone(), close: HashMap::new(), expressions: HashMap::new(), statements: HashMap::new(), identifiers: HashMap::new()};
   let mut block = parse_block(body.into_inner(), &mut newctx);
   let mut closureBuild = Vec::new();
   let mut closurePut = Vec::new();
@@ -384,9 +436,13 @@ fn parse_lambda(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>,
 
 fn process_toplevel(pair: pest::iterators::Pair<Rule, pest::inputs::StrInput>, mut funcs: &mut Arc<Functions>, mut classes: &mut Arc<Classes>) -> Value {
   let item = pair.into_inner().next().unwrap();
-  let mut ctx: ParseContext = ParseContext{stack: None, parentStack: None, close: HashMap::new()};
+  let mut ctx: ParseContext = ParseContext{stack: None, parentStack: None, close: HashMap::new(), expressions: HashMap::new(), statements: HashMap::new(), identifiers: HashMap::new()};
   match item.as_rule() {
-    Rule::assign => exec_statement(&parse_assign(item.into_inner(), &mut ctx), &mut ExecContext{stack: Vec::new(), functions: Arc::clone(funcs), classes: Arc::clone(classes)}),
+    Rule::assign => {
+      let ast = parse_assign(item.into_inner(), &mut ctx);
+      println!("AST {:?}", ast);
+      exec_statement(&ast, &mut ExecContext{stack: Vec::new(), functions: Arc::clone(funcs), classes: Arc::clone(classes)})
+    },
     Rule::memfuncdef => {
       
       let mut comps = item.into_inner();
@@ -463,8 +519,10 @@ fn exec_statement(s: &Statement, ctx: &mut ExecContext) -> Value {
         }
       }
       val
-    }
-    
+    },
+    Statement::Block(ref block) => {
+      exec_block(&*block, ctx)
+    },
     Statement::ObjAssignment{ref target, ref slot, ref rhs, ref cacheClass, ref cacheIndex} => {
       let tgt = exec_expr(&*target, ctx);
       let v = exec_expr(&*rhs, ctx);
@@ -502,7 +560,12 @@ fn exec_block(b: &Block, ctx: &mut ExecContext) -> Value {
 fn exec_expr(e: &Expression, ctx: &mut ExecContext) -> Value {
   match *e {
     Expression::Constant(c) => Value::from_int(c),
-    Expression::GlobalVariable(ref name) => variables.lock().unwrap()[name].clone(),
+    Expression::GlobalVariable(ref name) => {
+      match variables.lock().unwrap().get(name) {
+        Some(v) => v.clone(),
+        None => Value::from_err(String::new() + "no such variable " + name),
+      }
+    },
     Expression::StackVariable(idx) => ctx.stack[idx as usize].clone(),
     Expression::Operator {ref lhs, ref rhs, ref op} => {
       let l = exec_expr(&*lhs, ctx).as_int();
@@ -510,10 +573,8 @@ fn exec_expr(e: &Expression, ctx: &mut ExecContext) -> Value {
       let r = match op.as_str() {
         "+" => l+r,
         "-" => l-r,
-        ">" => {
-          // println!("lhs: {}, rhs: {}", l, r);
-          if l > r {1} else {0}
-        },
+        ">" => { if l > r {1} else {0}},
+        "<" => { if l < r {1} else {0}},
         _ => 1000000,
       };
       Value::from_int(r)
@@ -548,8 +609,8 @@ fn exec_expr(e: &Expression, ctx: &mut ExecContext) -> Value {
       Value::from_vec(v)
     },
     Expression::FunctionCall{ref function, ref args} => {
-      //println!("Entering function {}", function);
       let f = exec_expr(&*function, ctx);
+      println!("Entering function {:?}", f);
       match f.evalue() {
         EValue::Fun(ref fun) => {
           if fun.formals.len() != args.len() {

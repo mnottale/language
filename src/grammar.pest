@@ -1,9 +1,11 @@
 alpha = { 'a'..'z' | 'A'..'Z' }
 digit = { '0'..'9' }
-operator =  @{ "+" | "-" | ">"}
+operator =  @{ "+" | "-" | ">" | "<"}
 
 number = @{ (digit)+ }
-ident = @{ alpha ~ (alpha | digit)* }
+ident = @{ "%"? ~ alpha ~ (alpha | digit)* }
+
+parametric = { "$" ~ ident}
 
 exprlist = { expr ? ~ ("," ~ expr)* } 
 identlist = {ident ? ~ ("," ~ ident)*}
@@ -17,12 +19,12 @@ identchain = { ident ~ ( "." ~ ident)* }
 
 array = { "[" ~ exprlist ~ "]" }
 
-expr = { (objdef | lambda | binary | number | identchain | array | ( "(" ~ expr ~ ")" )) ~ ( ("[" ~ expr ~ "]") | ("(" ~ exprlist ~ ")" ) | ("." ~ ident))* }
+expr = { ( parametric | objdef | lambda | binary | number | identchain | array | ( "(" ~ expr ~ ")" )) ~ ( ("[" ~ expr ~ "]") | ("(" ~ exprlist ~ ")" ) | ("." ~ ident))* }
 
 binary = { (number | identchain | ( "(" ~ expr ~ ")" )) ~ operator ~ expr }
 
 
-statement = { vardecl | assign | IF | WHILE | expr }
+statement = { parametric | vardecl | assign | IF | WHILE | FORINT | expr | block}
 unary = _{ number | ident}
 block = { "{" ~ (statement ~ ";")* ~ "}" }
 
@@ -30,6 +32,7 @@ memfuncdef = { "func" ~ ident ~ "::" ~ ident ~ "(" ~ identlist ~ ")" ~ block}
 lambda = { "func" ~ "(" ~ identlist ~ ")" ~ block }
 IF = { "if" ~ expr ~ block ~ ( "else" ~ block )?}
 WHILE = { "while" ~ expr ~ block }
+FORINT = { "forint" ~ ident ~ "in" ~ expr ~ block }
 
 classdecl = { "class" ~ ident ~ "{" ~ ( ident ~ ";")* ~ "}" }
 

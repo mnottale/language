@@ -30,9 +30,15 @@ fn push(v: Value, what: Value) -> Value {
   v
 }
 
+fn print(v: Value) -> Value {
+  println!("{:?}", v);
+  v
+}
 
 pub fn load_stdlib(fs: &mut Functions) {
   fs.insert("len".to_string(), Value::from_pri(Box::new(len as fn(Value) -> i32)));
   fs.insert("reversed".to_string(), Value::from_pri(Box::new(reversed as fn(Vec<Value>) -> Vec<Value>)));
   fs.insert("push".to_string(), Value::from_pri(Box::new(push as fn(Value, Value) -> Value)));
+  fs.insert("print".to_string(), Value::from_pri(Box::new(print as fn(Value) -> Value)));
+  
 }
