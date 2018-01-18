@@ -28,6 +28,38 @@ impl Convertible for Vec<Value> {
   }
 }
 
+impl Convertible for Option<Value> {
+  fn to_value(&self) -> Value {
+    match self {
+      &Some(ref v) => v.clone(),
+      &None => Value::from_int(0)
+    }
+  }
+  fn from_value(v: &Value) -> Option<Value> {
+    Some(v.clone())
+  }
+}
+
+/*
+impl<'a> Convertible for &'a mut Vec<Value> {
+  fn to_value(& self) -> Value {
+    Value::from_vec(**self)
+  }
+  fn from_value(v: &Value) -> &'a mut Vec<Value> {
+    v.as_vec()
+  }
+}
+*/
+
+impl Convertible for &'static mut Vec<Value> {
+  fn to_value(& self) -> Value {
+    Value::from_vec((**self).clone())
+  }
+  fn from_value(v: &Value) -> &'static mut Vec<Value> {
+    v.as_vec()
+  }
+}
+
 pub trait Callable {
   fn call(&self, args: Vec<Value>) -> Value;
 }
@@ -44,6 +76,13 @@ impl<R: Convertible, P1:Convertible> Callable for fn(P1) -> R {
     self(Convertible::from_value(&args[0])).to_value()
   }
 }
+
+impl<'a, R: Convertible, P1:'a> Callable for fn(&mut P1) -> R where &'a mut P1: Convertible{
+  fn call(&self, args: Vec<Value>) -> Value {
+    self(Convertible::from_value(&args[0])).to_value()
+  }
+}
+
 
 impl<R: Convertible, P1:Convertible, P2: Convertible> Callable for fn(P1, P2) -> R {
   fn call(&self, args: Vec<Value>) -> Value {

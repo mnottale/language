@@ -357,6 +357,8 @@ fn parse_while(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, 
 fn parse_forint(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, ctx: &mut ParseContext) -> Statement {
   let ident = pairs.next().unwrap().into_span().as_str().to_string();
   let limit = parse_expr(pairs.next().unwrap().into_inner(), ctx);
+  // We will likely use our counter variable 'ident' in the block, so we need
+  // to create it before parsing block.
   match ctx.stack {
     Some(ref mut s) => {
       let l = s.len();

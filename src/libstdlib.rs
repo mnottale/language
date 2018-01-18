@@ -40,5 +40,6 @@ pub fn load_stdlib(fs: &mut Functions) {
   fs.insert("reversed".to_string(), Value::from_pri(Box::new(reversed as fn(Vec<Value>) -> Vec<Value>)));
   fs.insert("push".to_string(), Value::from_pri(Box::new(push as fn(Value, Value) -> Value)));
   fs.insert("print".to_string(), Value::from_pri(Box::new(print as fn(Value) -> Value)));
-  
+  let fptr: fn(&mut Vec<Value>)->(Option<Value>) = Vec::<Value>::pop;
+  fs.insert("pop".to_string(), Value::from_pri(Box::new(fptr)));
 }
