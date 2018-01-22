@@ -1,10 +1,53 @@
 
+use Object;
+use get_class;
+use value::{Value,T_ARR, T_BOX, T_OBJ};
 
-use value::{Value,T_ARR};
+pub trait Boxable {
+  fn class_name() -> String;
+}
 
 pub trait Convertible {
   fn to_value(&self) -> Value;
   fn from_value(&Value) -> Self;
+}
+
+impl<T> Convertible for T where T:Boxable+Clone+'static {
+  fn to_value(&self) -> Value {
+    let b = Value::from_any(Box::new(self.clone()));
+    Value::from_obj(Object{
+        class: get_class(T::class_name()),
+        fields: vec![b],
+    })
+  }
+  fn from_value(v: &Value) -> Self {
+    if v.vtype() == T_BOX {
+      (*v).as_box().downcast_ref::<T>().unwrap().clone()
+    } else if v.vtype() == T_OBJ {
+      (*v).as_obj().fields[0].as_box().downcast_ref::<T>().unwrap().clone()
+    } else {
+      panic!("Not an object nor a box")
+    }
+  }
+}
+
+impl<'a,T> Convertible for &'a mut T where T:Boxable+Clone+'static {
+  fn to_value(&self) -> Value {
+    let b = Value::from_any(Box::new((*self).clone()));
+    Value::from_obj(Object{
+        class: get_class(T::class_name()),
+        fields: vec![b],
+    })
+  }
+  fn from_value(v: &Value) -> Self {
+    if v.vtype() == T_BOX {
+      (*v).as_box().downcast_mut::<T>().unwrap()
+    } else if v.vtype() == T_OBJ {
+      (*v).as_obj().fields[0].as_box().downcast_mut::<T>().unwrap()
+    } else {
+      panic!("Not an object nor a box")
+    }
+  }
 }
 
 impl Convertible for i32 {
@@ -87,6 +130,18 @@ impl<'a, R: Convertible, P1:'a> Callable for fn(&mut P1) -> R where &'a mut P1: 
 impl<R: Convertible, P1:Convertible, P2: Convertible> Callable for fn(P1, P2) -> R {
   fn call(&self, args: Vec<Value>) -> Value {
     self(Convertible::from_value(&args[0]), Convertible::from_value(&args[1])).to_value()
+  }
+}
+
+impl<'a, R: Convertible, P1:'a, P2:Convertible> Callable for fn(&mut P1, P2) -> R where &'a mut P1: Convertible{
+  fn call(&self, args: Vec<Value>) -> Value {
+    self(Convertible::from_value(&args[0]), Convertible::from_value(&args[1])).to_value()
+  }
+}
+
+impl<'a, R: Convertible, P1:'a, P2:Convertible, P3:Convertible> Callable for fn(&mut P1, P2, P3) -> R where &'a mut P1: Convertible{
+  fn call(&self, args: Vec<Value>) -> Value {
+    self(Convertible::from_value(&args[0]), Convertible::from_value(&args[1]), Convertible::from_value(&args[2])).to_value()
   }
 }
 

@@ -4,6 +4,11 @@ version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
+name = "maplit"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[[package]]
 name = "pest"
 version = "1.0.0-beta.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -42,12 +47,14 @@ name = "urbi4"
 version = "0.1.0"
 dependencies = [
  "lazy_static 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "maplit 1.0.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "pest 1.0.0-beta.17 (registry+https://github.com/rust-lang/crates.io-index)",
  "pest_derive 1.0.0-beta.17 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [metadata]
 "checksum lazy_static 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)" = "c8f31047daa365f19be14b47c29df4f7c3b581832407daabe6ae77397619237d"
+"checksum maplit 1.0.1 (registry+https://github.com/rust-lang/crates.io-index)" = "08cbb6b4fef96b6d77bfc40ec491b1690c779e77b05cd9f07f787ed376fd4c43"
 "checksum pest 1.0.0-beta.17 (registry+https://github.com/rust-lang/crates.io-index)" = "e522b9cfbc9761d835914be9166262c45d945a9c41eb68d3ee7b8d82558bec39"
 "checksum pest_derive 1.0.0-beta.17 (registry+https://github.com/rust-lang/crates.io-index)" = "251f72914b138db9d876364d0d1b1dca988ee71139fb9a2fde3a66805de7b1b6"
 "checksum quote 0.3.15 (registry+https://github.com/rust-lang/crates.io-index)" = "7a6e920b65c65f10b2ae65c831a81a073a89edd28c7cce89475bff467ab4167a"

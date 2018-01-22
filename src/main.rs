@@ -1,6 +1,8 @@
 //#![feature(underscore_lifetimes)]
 
 
+#[macro_use] extern crate maplit;
+
 #[macro_use]
 extern crate lazy_static;
 
@@ -29,7 +31,7 @@ mod value;
 use value::Value;
 use value::EValue;
 
-use value::T_INT;
+use value::{T_INT, T_PRI};
 
 mod callable;
 use callable::Callable;
@@ -39,8 +41,13 @@ use libstdlib::load_stdlib;
 
 lazy_static! {
   static ref variables : Mutex<HashMap<String, Value>> = Mutex::new(HashMap::new());
-  static ref arrays : Mutex<Allocator<Vec<Value>>> = Mutex::new(Allocator::new(Vec::new()));
-  //static ref functions : Arc<HashMap<String, Box<Function>>> = Arc::new(HashMap::new());
+  static ref classes : Mutex<HashMap<String, Box<Class>>> = Mutex::new(HashMap::new());
+}
+
+pub fn get_class(cn: String) -> &'static Class {
+  unsafe {
+    &*(&**classes.lock().unwrap().get(&cn).unwrap() as *const Class)
+  }
 }
 
 struct Allocator<T: Clone> {
@@ -148,7 +155,7 @@ enum Statement {
 // variable name -> stack index
 type Stack = HashMap<String, i32>;
 
-struct Class {
+pub struct Class {
   name: String,
   fields: HashMap<String, i32>,
   funcs: HashMap<String, Value>,
@@ -183,7 +190,6 @@ type Classes = HashMap<String, Box<Class>>;
 struct ExecContext {
   stack: Vec<Value>,
   functions: Arc<Functions>,
-  classes: Arc<Classes>,
 }
 
 // DIE BEARCLAW DIE
@@ -436,14 +442,14 @@ fn parse_lambda(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>,
   }))
 }
 
-fn process_toplevel(pair: pest::iterators::Pair<Rule, pest::inputs::StrInput>, mut funcs: &mut Arc<Functions>, mut classes: &mut Arc<Classes>) -> Value {
+fn process_toplevel(pair: pest::iterators::Pair<Rule, pest::inputs::StrInput>, mut funcs: &mut Arc<Functions>) -> Value {
   let item = pair.into_inner().next().unwrap();
   let mut ctx: ParseContext = ParseContext{stack: None, parentStack: None, close: HashMap::new(), expressions: HashMap::new(), statements: HashMap::new(), identifiers: HashMap::new()};
   match item.as_rule() {
     Rule::assign => {
       let ast = parse_assign(item.into_inner(), &mut ctx);
       println!("AST {:?}", ast);
-      exec_statement(&ast, &mut ExecContext{stack: Vec::new(), functions: Arc::clone(funcs), classes: Arc::clone(classes)})
+      exec_statement(&ast, &mut ExecContext{stack: Vec::new(), functions: Arc::clone(funcs)})
     },
     Rule::memfuncdef => {
       
@@ -469,13 +475,13 @@ fn process_toplevel(pair: pest::iterators::Pair<Rule, pest::inputs::StrInput>, m
         closureBuild:Vec::new(),
         closurePut: Vec::new()
       });
-      Arc::get_mut(&mut classes).unwrap().get_mut(&cname).unwrap().funcs.insert(name, vf);
+      classes.lock().unwrap().get_mut(&cname).unwrap().funcs.insert(name, vf);
       Value::from_int(0)
     },
     Rule::classdecl => {
       let cls = parse_classdecl(item.into_inner(), &mut ctx);
       let cname = cls.name.clone();
-      Arc::get_mut(classes).unwrap().insert(cls.name.clone(), Box::new(cls));
+      classes.lock().unwrap().insert(cls.name.clone(), Box::new(cls));
       Value::from_str(cname)
     }
     _ => Value::from_int(-1000000),
@@ -595,6 +601,7 @@ fn exec_expr(e: &Expression, ctx: &mut ExecContext) -> Value {
           EValue::Fun(_o) => Value::from_err("functions cannot be indexed".to_string()),
           EValue::Pri(_o) => Value::from_err("primitives cannot be indexed".to_string()),
           EValue::Obj(_o) => Value::from_err("objects cannot be indexed".to_string()),
+          EValue::Box(_o) => Value::from_err("boxed cannot be indexed".to_string()),
           EValue::Vec(v) => if v.len() <= (i.as_int() as usize) || i.as_int() < 0 {
             Value::from_err("invalid index value".to_string())
           } else {
@@ -618,7 +625,7 @@ fn exec_expr(e: &Expression, ctx: &mut ExecContext) -> Value {
           if fun.formals.len() != args.len() {
             Value::from_err("wrong number of arguments".to_string())
           } else {
-            let mut fctx = ExecContext{stack: Vec::new(), functions: Arc::clone(&ctx.functions), classes: Arc::clone(&ctx.classes)};
+            let mut fctx = ExecContext{stack: Vec::new(), functions: Arc::clone(&ctx.functions)};
             fctx.stack.resize(fun.stack.len(), Value::from_int(0));
             for i in 0..args.len() {
               fctx.stack[i] = exec_expr(&*args[i], ctx);
@@ -637,32 +644,43 @@ fn exec_expr(e: &Expression, ctx: &mut ExecContext) -> Value {
           c.call(a)
         }
         EValue::Vec(ref v) => {
-          let fun = v[0].as_fun();
-          if fun.formals.len() != args.len() + v.len()-1 {
-            Value::from_err("wrong number of arguments".to_string())
-          } else {
-            let mut fctx = ExecContext{stack: Vec::new(), functions: Arc::clone(&ctx.functions), classes: Arc::clone(&ctx.classes)};
-            fctx.stack.resize(fun.stack.len(), Value::from_int(0));
+          if v[0].vtype() == T_PRI {
+            let mut a = Vec::new();
             for i in 1..v.len() {
-              fctx.stack[i-1] = v[i].clone();
+              a.push(v[i].clone());
             }
             for i in 0..args.len() {
-              fctx.stack[i+v.len()-1] = exec_expr(&*args[i], ctx);
+              a.push(exec_expr(&*args[i], ctx));
             }
-            for i in 0..fun.closure.len() {
-              fctx.stack[fun.closurePut[i] as usize] = fun.closure[i].clone();
+            v[0].as_pri().call(a)
+          } else {
+            let fun = v[0].as_fun();
+            if fun.formals.len() != args.len() + v.len()-1 {
+              Value::from_err(format!("wrong number of arguments: {}, expected {}", args.len()+v.len()-1, fun.formals.len()).to_string())
+            } else {
+              let mut fctx = ExecContext{stack: Vec::new(), functions: Arc::clone(&ctx.functions)};
+              fctx.stack.resize(fun.stack.len(), Value::from_int(0));
+              for i in 1..v.len() {
+                fctx.stack[i-1] = v[i].clone();
+              }
+              for i in 0..args.len() {
+                fctx.stack[i+v.len()-1] = exec_expr(&*args[i], ctx);
+              }
+              for i in 0..fun.closure.len() {
+                fctx.stack[fun.closurePut[i] as usize] = fun.closure[i].clone();
+              }
+              exec_block(&*fun.code, &mut fctx)
             }
-            exec_block(&*fun.code, &mut fctx)
           }
         }
         _ => Value::from_err("call of not a function".to_string()),
       }
     },
     Expression::ObjDef{ref cls, ref init} => {
-      if ctx.classes[cls].fields.len() != init.len() {
+      if classes.lock().unwrap()[cls].fields.len() != init.len() {
         Value::from_err(String::new() + "Initializer list has wrong size for " + cls)
       } else {
-        let mut obj = Object::new(&*ctx.classes[cls]);
+        let mut obj = Object::new(&*classes.lock().unwrap()[cls]);
         for i in 0..init.len() {
           let v = exec_expr(&*init[i], ctx);
           obj.fields.push(v);
@@ -736,8 +754,7 @@ fn main() {
   test_value();
   let mut state : HashMap<String, i32> = HashMap::new();
   let mut functions = Arc::new(Functions::new());
-  load_stdlib(&mut variables.lock().unwrap());
-  let mut classes = Arc::new(Classes::new());
+  load_stdlib(&mut variables.lock().unwrap(), &mut *classes.lock().unwrap());
   let stdin = io::stdin();
   loop {
     let mut line = String::new();
@@ -758,7 +775,7 @@ fn main() {
         println!("  Rule:    {:?}", inner_pair.as_rule());
       }*/
       let now = Instant::now();
-      let val = process_toplevel(pair, &mut functions, &mut classes);
+      let val = process_toplevel(pair, &mut functions);
       println!("={:?}    in {:?}", val, Instant::now()-now);
       for (k, v) in &state {
         println!("{} = {:?}", k, v);
