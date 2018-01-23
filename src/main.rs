@@ -30,6 +30,8 @@ mod value;
 
 use value::Value;
 use value::EValue;
+use value::box_f64;
+use value::unbox_f64;
 
 use value::{T_INT, T_PRI};
 
@@ -328,6 +330,7 @@ fn parse_statement(pair: pest::iterators::Pair<Rule, pest::inputs::StrInput>, ct
     Rule::IF => parse_if(inner_pair.into_inner(), ctx),
     Rule::WHILE => parse_while(inner_pair.into_inner(), ctx),
     Rule::FORINT => parse_forint(inner_pair.into_inner(), ctx),
+    Rule::FORC => parse_forc(inner_pair.into_inner(), ctx),
     Rule::expr => Statement::Expression(Box::new(parse_expr(inner_pair.into_inner(), ctx))),
     Rule::vardecl => {
       let mut vd = inner_pair.into_inner();
@@ -380,6 +383,21 @@ fn parse_forint(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>,
   ctx.identifiers.insert("%v".to_string(), ident);
   Statement::Block(Box::new(parse_block(rule.unwrap().next().unwrap().into_inner(), ctx)))
 }
+
+fn parse_forc(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, ctx: &mut ParseContext) -> Statement {
+  let init = parse_statement(pairs.next().unwrap(), ctx);
+  let limit = parse_expr(pairs.next().unwrap().into_inner(), ctx);
+  let increment = parse_statement(pairs.next().unwrap(), ctx);
+  let block = parse_block(pairs.next().unwrap().into_inner(), ctx);
+  let p = "{$binit; while $e { $b; $inc;};}";
+  let rule = LParser::parse_str(Rule::block, p);
+  ctx.expressions.insert("$e".to_string(), Box::new(limit));
+  ctx.statements.insert("$b".to_string(), Box::new(Statement::Block(Box::new(block))));
+  ctx.statements.insert("$binit".to_string(), Box::new(init));
+  ctx.statements.insert("$inc".to_string(), Box::new(increment));
+  Statement::Block(Box::new(parse_block(rule.unwrap().next().unwrap().into_inner(), ctx)))
+}
+
 
 fn parse_if(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, ctx: &mut ParseContext) -> Statement {
   let expr = pairs.next().unwrap();
@@ -619,7 +637,7 @@ fn exec_expr(e: &Expression, ctx: &mut ExecContext) -> Value {
     },
     Expression::FunctionCall{ref function, ref args} => {
       let f = exec_expr(&*function, ctx);
-      println!("Entering function {:?}", f);
+      //println!("Entering function {:?}", f);
       match f.evalue() {
         EValue::Fun(ref fun) => {
           if fun.formals.len() != args.len() {
@@ -746,6 +764,13 @@ fn test_value() {
     println!("vs: {}", vs2.as_str());
     println!("vv: {:?}", vv2.as_vec());
   }
+  println!("{} = {}", 63.2345, unbox_f64(box_f64(63.2345)));
+  println!("{} = {}", 632345.0, unbox_f64(box_f64(632345.0)));
+  println!("{} = {}", 1e1000, unbox_f64(box_f64(1e1000)));
+  println!("{} = {}", -1e1000, unbox_f64(box_f64(-1e1000)));
+   println!("{} = {}", 1e300, unbox_f64(box_f64(1e300)));
+  println!("{} = {}", 1e-300, unbox_f64(box_f64(1e-300)));
+  println!("{} = {}", 0.0/0.0, unbox_f64(box_f64(0.0/0.0)));
 }
 
 use std::time::Instant;

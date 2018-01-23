@@ -24,7 +24,7 @@ expr = { ( parametric | objdef | lambda | binary | number | identchain | array |
 binary = { (number | identchain | ( "(" ~ expr ~ ")" )) ~ operator ~ expr }
 
 
-statement = { parametric | vardecl | assign | IF | WHILE | FORINT | expr | block}
+statement = { parametric | vardecl | assign | IF | WHILE | FORINT | FORC | expr | block}
 unary = _{ number | ident}
 block = { "{" ~ (statement ~ ";")* ~ "}" }
 
@@ -33,7 +33,7 @@ lambda = { "func" ~ "(" ~ identlist ~ ")" ~ block }
 IF = { "if" ~ expr ~ block ~ ( "else" ~ block )?}
 WHILE = { "while" ~ expr ~ block }
 FORINT = { "forint" ~ ident ~ "in" ~ expr ~ block }
-
+FORC   = { "for" ~ statement ~ ";" ~ expr ~ ";" ~ statement ~ block }
 classdecl = { "class" ~ ident ~ "{" ~ ( ident ~ ";")* ~ "}" }
 
 

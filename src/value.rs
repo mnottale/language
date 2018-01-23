@@ -41,6 +41,64 @@ pub static T_BOX:u64 = 8;
 use std::ops::Deref;
 use std::ops::DerefMut;
 
+fn f64_repr(v: f64) -> u64 {
+  unsafe {
+    let iptr: *const f64 = &v;
+    let jptr = iptr as *const u64;
+    let j = *jptr;
+    j
+  }
+}
+
+fn f64_from_repr(v: u64) -> f64 {
+  unsafe {
+    let iptr: *const u64 = &v;
+    let jptr = iptr as *const f64;
+    *jptr
+  }
+}
+
+pub fn box_f64(v: f64) -> u64 {
+  let repr = f64_repr(v);
+  let sgn = repr >> 63;
+  let mut exp = (repr & 0b01111111_11110000_00000000_00000000_00000000_00000000_00000000_00000000) >> (63-11);
+  let mut man = repr & 0x000FFFFFFFFFFFFF;
+  // exp is +1023   inf is s,2047,0   NaN is s,2047,nonzero
+  if exp == 2047 {
+    exp = 1023;
+  }
+  else {
+    if (exp as i64) -1023 > 511 { // too big, INF
+      exp = 1023;
+      man = 0;
+    } else {
+      if (exp as i64) - 1023 < -511 { // too small, 0
+        exp = 0;
+        man = 0;
+      } else {
+        exp = exp - 1023 + 511;
+      }
+    }
+  }
+  man + (exp << 52) + (sgn << 62) + (1<<63)
+}
+
+pub fn unbox_f64(repr:u64) -> f64 {
+  let sgn = (repr >> 62) & 1;
+  let mut exp = (repr >> 52) & 0b1111111111;
+  let man = repr & 0x000FFFFFFFFFFFFF;
+  if exp == 1023 {
+    exp = 2047;
+  } else {
+    exp = exp - 511 + 1023;
+  }
+  let ieee = (sgn << 63) + (exp << 52) + man;
+  f64_from_repr(ieee)
+}
+
+
+
+
 impl Value {
   pub fn from_int(val: i32) -> Value {
     Value{v: (T_INT << TSHIFT) + ((val as u32) as u64)}
