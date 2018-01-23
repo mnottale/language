@@ -8,13 +8,13 @@ pub trait Boxable {
 }
 
 pub trait Convertible {
-  fn to_value(&self) -> Value;
+  fn to_value(self) -> Value;
   fn from_value(&Value) -> Self;
 }
 
 impl<T> Convertible for T where T:Boxable+Clone+'static {
-  fn to_value(&self) -> Value {
-    let b = Value::from_any(Box::new(self.clone()));
+  fn to_value(self) -> Value {
+    let b = Value::from_any(Box::new(self));
     Value::from_obj(Object{
         class: get_class(T::class_name()),
         fields: vec![b],
@@ -32,7 +32,7 @@ impl<T> Convertible for T where T:Boxable+Clone+'static {
 }
 
 impl<'a,T> Convertible for &'a mut T where T:Boxable+Clone+'static {
-  fn to_value(&self) -> Value {
+  fn to_value(self) -> Value {
     let b = Value::from_any(Box::new((*self).clone()));
     Value::from_obj(Object{
         class: get_class(T::class_name()),
@@ -51,17 +51,22 @@ impl<'a,T> Convertible for &'a mut T where T:Boxable+Clone+'static {
 }
 
 impl Convertible for i32 {
-  fn to_value(&self) -> Value { Value::from_int(*self)}
+  fn to_value(self) -> Value { Value::from_int(self)}
   fn from_value(v: &Value) -> i32 { v.as_int()}
 }
 
+impl Convertible for f64 {
+  fn to_value(self) -> Value { Value::from_flt(self)}
+  fn from_value(v: &Value) -> f64 { v.as_flt()}
+}
+
 impl Convertible for Value {
-  fn to_value(&self) -> Value { self.clone()}
+  fn to_value(self) -> Value { self.clone()}
   fn from_value(v: &Value) -> Value { v.clone()}
 }
 
 impl Convertible for Vec<Value> {
-  fn to_value(&self) -> Value { Value::from_vec(self.clone())}
+  fn to_value(self) -> Value { Value::from_vec(self)}
   fn from_value(v: &Value) -> Vec<Value> {
     if v.vtype() == T_ARR {
       v.as_vec().clone()
@@ -72,10 +77,10 @@ impl Convertible for Vec<Value> {
 }
 
 impl Convertible for Option<Value> {
-  fn to_value(&self) -> Value {
+  fn to_value(self) -> Value {
     match self {
-      &Some(ref v) => v.clone(),
-      &None => Value::from_int(0)
+      Some(v) => v,
+      None => Value::from_err("No value".to_string())
     }
   }
   fn from_value(v: &Value) -> Option<Value> {
@@ -95,8 +100,8 @@ impl<'a> Convertible for &'a mut Vec<Value> {
 */
 
 impl Convertible for &'static mut Vec<Value> {
-  fn to_value(& self) -> Value {
-    Value::from_vec((**self).clone())
+  fn to_value(self) -> Value {
+    Value::from_vec((*self).clone())
   }
   fn from_value(v: &Value) -> &'static mut Vec<Value> {
     v.as_vec()
