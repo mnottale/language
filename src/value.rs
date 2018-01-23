@@ -76,7 +76,7 @@ pub fn box_f64(v: f64) -> u64 {
         exp = 0;
         man = 0;
       } else {
-        exp = exp - 1023 + 511;
+        exp = ((exp as i64) - 1023 + 511) as u64;
       }
     }
   }
@@ -90,7 +90,9 @@ pub fn unbox_f64(repr:u64) -> f64 {
   if exp == 1023 {
     exp = 2047;
   } else {
-    exp = exp - 511 + 1023;
+    if exp != 0 {
+      exp = ((exp as i64) - 511 + 1023) as u64;
+    }
   }
   let ieee = (sgn << 63) + (exp << 52) + man;
   f64_from_repr(ieee)

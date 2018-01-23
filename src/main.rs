@@ -764,13 +764,15 @@ fn test_value() {
     println!("vs: {}", vs2.as_str());
     println!("vv: {:?}", vv2.as_vec());
   }
-  println!("{} = {}", 63.2345, unbox_f64(box_f64(63.2345)));
-  println!("{} = {}", 632345.0, unbox_f64(box_f64(632345.0)));
-  println!("{} = {}", 1e1000, unbox_f64(box_f64(1e1000)));
-  println!("{} = {}", -1e1000, unbox_f64(box_f64(-1e1000)));
-   println!("{} = {}", 1e300, unbox_f64(box_f64(1e300)));
-  println!("{} = {}", 1e-300, unbox_f64(box_f64(1e-300)));
-  println!("{} = {}", 0.0/0.0, unbox_f64(box_f64(0.0/0.0)));
+  println!("{} = \n{}", 63.2345, unbox_f64(box_f64(63.2345)));
+  println!("{} = \n{}", 0.5, unbox_f64(box_f64(0.5)));
+  println!("{} = \n{}", 632345.0, unbox_f64(box_f64(632345.0)));
+  println!("{} = \n{}", 1e1000, unbox_f64(box_f64(1e1000)));
+  println!("{} = \n{}", -1e1000, unbox_f64(box_f64(-1e1000)));
+   println!("{} = \n{}", 1e300, unbox_f64(box_f64(1e300)));
+   println!("{} = \n{}", 1e-50, unbox_f64(box_f64(1e-50)));
+  println!("{} = \n{}", 1e-300, unbox_f64(box_f64(1e-300)));
+  println!("{} = \n{}", 0.0/0.0, unbox_f64(box_f64(0.0/0.0)));
 }
 
 use std::time::Instant;
