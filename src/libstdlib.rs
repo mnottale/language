@@ -13,6 +13,7 @@ use callable::Boxable;
 fn len(v: Value) -> i32 {
   match v.evalue() {
     EValue::Int(_v) => 1,
+    EValue::Flt(_v) => 1,
     EValue::Str(s) => s.len() as i32,
     EValue::Err(_e) => 1,
     EValue::Vec(v) => v.len() as i32,

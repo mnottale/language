@@ -8,6 +8,7 @@ use std::any::Any;
 #[derive(Debug)]
 pub enum EValue {
   Int(i32),
+  Flt(f64),
   Str(&'static mut String),
   Err(&'static mut String),
   Vec(&'static mut List),
@@ -37,6 +38,7 @@ pub static T_OBJ:u64 = 5;
 pub static T_FUN:u64 = 6;
 pub static T_PRI:u64 = 7;
 pub static T_BOX:u64 = 8;
+pub static T_FLT:u64 = 32768;
 
 use std::ops::Deref;
 use std::ops::DerefMut;
@@ -104,6 +106,9 @@ pub fn unbox_f64(repr:u64) -> f64 {
 impl Value {
   pub fn from_int(val: i32) -> Value {
     Value{v: (T_INT << TSHIFT) + ((val as u32) as u64)}
+  }
+  pub fn from_flt(val: f64) -> Value {
+    Value{v: box_f64(val)}
   }
   pub fn from_str(val: String) -> Value {
     let sptr = Box::into_raw(Box::new(val));
@@ -210,8 +215,12 @@ impl Value {
   pub fn as_int(& self) -> i32 {
     ((self.v & AMASK) as u32) as i32
   }
+  pub fn as_flt(& self) -> f64 {
+    unbox_f64(self.v)
+  }
   pub fn evalue(& self) -> EValue {
     let t = self.vtype();
+    if t >> 15 == 1 { return EValue::Flt(self.as_flt());}
     if t == T_INT { return EValue::Int(self.as_int()); }
     if t == T_STR { return EValue::Str(self.as_str()); }
     if t == T_ERR { return EValue::Err(self.as_err()); }
@@ -225,6 +234,7 @@ impl Value {
   pub fn to_bool(& self) -> bool {
     match self.evalue() {
       EValue::Int(i) => i != 0 as i32,
+      EValue::Flt(i) => i != 0.0,
       EValue::Str(s) => s.len() != 0,
       EValue::Vec(v) => v.len() != 0,
       EValue::Obj(_o) => true,
@@ -329,7 +339,7 @@ impl Clone for Value {
     if self.vtype() == T_ERR {
       return Value::from_err(self.as_err().clone());
     }
-    if self.vtype() == T_INT {
+    if self.vtype() == T_INT || (self.vtype() >> 15 == 1) {
       return Value{v: self.v};
     }
     if self.vtype() == T_ARR {

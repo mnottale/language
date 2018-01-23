@@ -37,6 +37,7 @@ use value::{T_INT, T_PRI};
 
 mod callable;
 use callable::Callable;
+use callable::Convertible;
 
 mod libstdlib;
 use libstdlib::load_stdlib;
@@ -132,6 +133,7 @@ type IdentList = Vec<String>;
 #[derive(Clone, Debug)]
 enum Expression {
   Constant(i32),
+  Constantf(f64),
   GlobalVariable(String),
   StackVariable(i32),
   Array(ExprList),
@@ -293,7 +295,14 @@ fn parse_expr(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, c
   let content = pairs.next().unwrap();
   let mut v = match content.as_rule() {
       Rule::binary => parse_binary(content.into_inner(), ctx),
-      Rule::number => Expression::Constant(content.into_span().as_str().to_string().parse::<i32>().unwrap()),
+      Rule::number => {
+        let val = content.into_span().as_str().to_string().parse::<f64>().unwrap();
+        if val == val.floor() {
+          Expression::Constant(val as i32)
+        } else {
+          Expression::Constantf(val)
+        }
+      },
       Rule::ident =>  parse_variable(content.into_span().as_str().to_string(), ctx),
       Rule::identchain => parse_identchain(content.into_inner(), ctx),
       Rule::expr => parse_expr(content.into_inner(), ctx),
@@ -583,9 +592,40 @@ fn exec_block(b: &Block, ctx: &mut ExecContext) -> Value {
   return val;
 }
 
+fn exec_op_f (v1: f64, v2: f64, op: &str) -> Value {
+  match op {
+    "+" => Convertible::to_value(v1 + v2),
+    "-" => Convertible::to_value(v1 - v2),
+    "/" => Convertible::to_value(v1 / v2),
+    "*" => Convertible::to_value(v1 * v2),
+    "%" => Convertible::to_value(v1 % v2),
+    "<" => { if v1 < v2 {Value::from_int(1)} else {Value::from_int(0)}},
+    ">" => { if v1 > v2 {Value::from_int(1)} else {Value::from_int(0)}},
+    "==" => { if v1 == v2 {Value::from_int(1)} else {Value::from_int(0)}},
+    _ => Value::from_err("Operator not implemented".to_string()),
+  }
+}
+
+fn exec_op_i (v1: i32, v2: i32, op: &str) -> Value {
+  match op {
+    "+" => Convertible::to_value(v1 + v2),
+    "-" => Convertible::to_value(v1 - v2),
+    "/" => Convertible::to_value(v1 / v2),
+    "*" => Convertible::to_value(v1 * v2),
+    "%" => Convertible::to_value(v1 % v2),
+    "<" => { if v1 < v2 {Value::from_int(1)} else {Value::from_int(0)}},
+    ">" => { if v1 > v2 {Value::from_int(1)} else {Value::from_int(0)}},
+    "==" => { if v1 == v2 {Value::from_int(1)} else {Value::from_int(0)}},
+    "<<" => Convertible::to_value(v1 << v2),
+    ">>" => Convertible::to_value(v1 >> v2),
+    _ => Value::from_err("Operator not implemented".to_string()),
+  }
+}
+
 fn exec_expr(e: &Expression, ctx: &mut ExecContext) -> Value {
   match *e {
     Expression::Constant(c) => Value::from_int(c),
+    Expression::Constantf(c) => Value::from_flt(c),
     Expression::GlobalVariable(ref name) => {
       match variables.lock().unwrap().get(name) {
         Some(v) => v.clone(),
@@ -594,16 +634,15 @@ fn exec_expr(e: &Expression, ctx: &mut ExecContext) -> Value {
     },
     Expression::StackVariable(idx) => ctx.stack[idx as usize].clone(),
     Expression::Operator {ref lhs, ref rhs, ref op} => {
-      let l = exec_expr(&*lhs, ctx).as_int();
-      let r = exec_expr(&*rhs, ctx).as_int();
-      let r = match op.as_str() {
-        "+" => l+r,
-        "-" => l-r,
-        ">" => { if l > r {1} else {0}},
-        "<" => { if l < r {1} else {0}},
-        _ => 1000000,
-      };
-      Value::from_int(r)
+      let l = exec_expr(&*lhs, ctx);
+      let r = exec_expr(&*rhs, ctx);
+      match (l.evalue(), r.evalue()) {
+        (EValue::Int(a), EValue::Int(b)) => exec_op_i(a, b, op.as_str()),
+        (EValue::Flt(a), EValue::Flt(b)) => exec_op_f(a, b, op.as_str()),
+        (EValue::Flt(a), EValue::Int(b)) => exec_op_f(a, b as f64, op.as_str()),
+        (EValue::Int(a), EValue::Flt(b)) => exec_op_f(a as f64, b, op.as_str()),
+        _ => Value::from_err("Operator not supported on this types".to_string()),
+      }
     },
     Expression::SubScript{ref v, ref idx} => {
       let val = exec_expr(&*v, ctx);
@@ -614,6 +653,7 @@ fn exec_expr(e: &Expression, ctx: &mut ExecContext) -> Value {
       else {
         match val.evalue() {
           EValue::Int(_ii) => Value::from_err("int cannot be indexed".to_string()),
+          EValue::Flt(_ii) => Value::from_err("float cannot be indexed".to_string()),
           EValue::Str(data) => Value::from_int(data.clone().into_bytes()[i.as_int() as usize] as i32),
           EValue::Err(e) => Value::from_err(e.clone()),
           EValue::Fun(_o) => Value::from_err("functions cannot be indexed".to_string()),

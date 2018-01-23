@@ -1,8 +1,8 @@
 alpha = { 'a'..'z' | 'A'..'Z' }
 digit = { '0'..'9' }
-operator =  @{ "+" | "-" | ">" | "<"}
+operator =  @{ "+" | "-" | ">" | "<" | "/" | "*" | "%" | "=="}
 
-number = @{ (digit)+ }
+number = @{ (digit)+ ~ ("." ~ (digit)+)?}
 ident = @{ "%"? ~ alpha ~ (alpha | digit)* }
 
 parametric = { "$" ~ ident}
