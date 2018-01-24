@@ -21,6 +21,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::io::{self, BufRead};
 use std::sync::Arc;
+use std::cell::Cell;
 
 use std::ops::Deref;
 use std::ops::DerefMut;
@@ -138,7 +139,7 @@ enum Expression {
   StackVariable(i32),
   Array(ExprList),
   Lambda(Box<Function>),
-  Dot{lhs: Box<Expression>, rhs: String, cacheClass: *const Class, cacheIndex: i32},
+  Dot{lhs: Box<Expression>, rhs: String, cacheClass: Cell<*const Class>, cacheIndex: Cell<i32>},
   ObjDef{cls: String, init: Vec<Box<Expression>>},
   SubScript{v: Box<Expression>, idx: Box<Expression>},
   Operator{lhs: Box<Expression>, rhs: Box<Expression>, op: String},
@@ -151,8 +152,8 @@ enum Statement {
   StackAssignment{target: i32, rhs: Box<Expression>},
   GlobalIndexAssignment{target: String, rhs: Box<Expression>, index: Box<Expression>},
   StackIndexAssignment{target: i32, rhs: Box<Expression>, index: Box<Expression>},
-  ObjAssignment{target: Box<Expression>, slot: String, rhs: Box<Expression>, cacheClass: *const Class, cacheIndex: i32},
-  ObjIndexAssignment{target: Box<Expression>, slot: String, rhs: Box<Expression>, index: Box<Expression>, cacheClass: *const Class, cacheIndex: i32},
+  ObjAssignment{target: Box<Expression>, slot: String, rhs: Box<Expression>, cacheClass: Cell<*const Class>, cacheIndex: Cell<i32>},
+  ObjIndexAssignment{target: Box<Expression>, slot: String, rhs: Box<Expression>, index: Box<Expression>, cacheClass: Cell<*const Class>, cacheIndex: Cell<i32>},
   If{cond: Box<Expression>, block: Box<Block>, blockelse: Option<Box<Block>>},
   While{cond: Box<Expression>, block: Box<Block>},
   Block(Box<Block>),
@@ -197,16 +198,6 @@ type Classes = HashMap<String, Box<Class>>;
 struct ExecContext {
   stack: Vec<Value>,
   functions: Arc<Functions>,
-}
-
-// DIE BEARCLAW DIE
-fn bearclaw<T>(t: &T) -> &'static mut T {
-  unsafe {
-    let tt = t as *const T;
-    let tt2 = tt as u64;
-    let tt3 = tt2 as *mut T;
-    return &mut *tt3;
-  }
 }
 
 fn parse_classdecl(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, _ctx: &mut ParseContext) -> Class {
@@ -289,7 +280,7 @@ fn parse_identchain(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInp
   let mut init = parse_variable(first, ctx);
   for p in pairs {
     let next = p.into_span().as_str().to_string();
-    init = Expression::Dot{lhs: Box::new(init), rhs: next, cacheClass: 0 as *const Class, cacheIndex: 0};
+    init = Expression::Dot{lhs: Box::new(init), rhs: next, cacheClass: Cell::new(0 as *const Class), cacheIndex: Cell::new(0)};
   }
   init
 }
@@ -323,7 +314,7 @@ fn parse_expr(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, c
   // parse subsequents [expr] or .ident or (exprlist)
   for p in pairs {
     v = match p.as_rule() {
-      Rule::ident => Expression::Dot{lhs: Box::new(v), rhs: p.into_span().as_str().to_string(), cacheClass: 0 as *const Class, cacheIndex:0},
+      Rule::ident => Expression::Dot{lhs: Box::new(v), rhs: p.into_span().as_str().to_string(), cacheClass: Cell::new(0 as *const Class), cacheIndex: Cell::new(0)},
       Rule::expr => Expression::SubScript{v: Box::new(v), idx: Box::new(parse_expr(p.into_inner(), ctx))},
       Rule::exprlist => Expression::FunctionCall{function: Box::new(v), args: parse_exprlist(p.into_inner(), ctx)},
       _ => unreachable!(),
@@ -434,7 +425,7 @@ fn parse_assign(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>,
       match ident {
         Expression::GlobalVariable(v) => Statement::GlobalAssignment{target: v, rhs: Box::new(rrhs)},
         Expression::StackVariable(v) => Statement::StackAssignment{target: v, rhs: Box::new(rrhs)},
-        Expression::Dot{lhs, rhs, cacheClass, cacheIndex} => Statement::ObjAssignment{target: lhs, slot: rhs, rhs: Box::new(rrhs), cacheClass: 0 as *const Class, cacheIndex: 0},
+        Expression::Dot{lhs, rhs, cacheClass, cacheIndex} => Statement::ObjAssignment{target: lhs, slot: rhs, rhs: Box::new(rrhs), cacheClass: Cell::new(0 as *const Class), cacheIndex: Cell::new(0)},
         _ => {unreachable!()},
         }
       },
@@ -444,7 +435,7 @@ fn parse_assign(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>,
       match ident {
         Expression::GlobalVariable(v) => Statement::GlobalIndexAssignment{target: v, rhs: Box::new(rrhs), index: Box::new(index)},
         Expression::StackVariable(v) => Statement::StackIndexAssignment{target: v, rhs: Box::new(rrhs), index: Box::new(index)},
-        Expression::Dot{lhs, rhs, cacheClass, cacheIndex} => Statement::ObjIndexAssignment{target: lhs, slot: rhs, rhs: Box::new(rrhs), index: Box::new(index), cacheClass: 0 as *const Class, cacheIndex: 0},
+        Expression::Dot{lhs, rhs, cacheClass, cacheIndex} => Statement::ObjIndexAssignment{target: lhs, slot: rhs, rhs: Box::new(rrhs), index: Box::new(index), cacheClass: Cell::new(0 as *const Class), cacheIndex: Cell::new(0)},
         _ => {unreachable!()},
 
       }
@@ -607,14 +598,14 @@ fn exec_statement(s: &Statement, ctx: &mut ExecContext) -> Value {
       let v = exec_expr(&*rhs, ctx);
       match tgt.evalue() {
         EValue::Obj(o) => {
-          if o.class as *const Class == *cacheClass {
-            o.fields[*cacheIndex as usize] = v.clone();
+          if o.class as *const Class == cacheClass.get() {
+            o.fields[cacheIndex.get() as usize] = v.clone();
             v
           } else {
             match o.class.fields.get(slot) {
               Some(idx) => {
-                *bearclaw(cacheClass) = o.class;
-                *bearclaw(cacheIndex) = *idx;
+                cacheClass.set(o.class);
+                cacheIndex.set(*idx);
                 o.fields[*idx as usize] = v.clone();
                 v
               },
@@ -631,14 +622,14 @@ fn exec_statement(s: &Statement, ctx: &mut ExecContext) -> Value {
       let aidx = exec_expr(&*index, ctx);
       match tgt.evalue() {
         EValue::Obj(o) => {
-          if o.class as *const Class == *cacheClass {
-          	assign_index(&mut o.fields[*cacheIndex as usize], &aidx, v)
+          if o.class as *const Class == cacheClass.get() {
+          	assign_index(&mut o.fields[cacheIndex.get() as usize], &aidx, v)
           } else {
             match o.class.fields.get(slot) {
               Some(idx) => {
-                *bearclaw(cacheClass) = o.class;
-                *bearclaw(cacheIndex) = *idx;
-                assign_index(&mut o.fields[*cacheIndex as usize], &aidx, v)
+                cacheClass.set(o.class);
+                cacheIndex.set(*idx);
+                assign_index(&mut o.fields[cacheIndex.get() as usize], &aidx, v)
               },
               None => Value::from_err(String::new() + "no such field: " + &slot),
             }
@@ -816,13 +807,13 @@ fn exec_expr(e: &Expression, ctx: &mut ExecContext) -> Value {
       let val = exec_expr(&*lhs, ctx);
       match val.evalue() {
         EValue::Obj(o) => {
-          if o.class as *const Class == *cacheClass {
-            o.fields[*cacheIndex as usize].clone()
+          if o.class as *const Class == cacheClass.get() {
+            o.fields[cacheIndex.get() as usize].clone()
           } else {
             match o.class.fields.get(rhs) {
               Some(idx) => {
-                *bearclaw(cacheClass) = o.class;
-                *bearclaw(cacheIndex) = *idx;
+                cacheClass.set(o.class);
+                cacheIndex.set(*idx);
                 return o.fields[*idx as usize].clone();
               },
               None => {}
