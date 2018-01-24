@@ -9,7 +9,7 @@ parametric = { "$" ~ ident}
 
 exprlist = { expr ? ~ ("," ~ expr)* } 
 identlist = {ident ? ~ ("," ~ ident)*}
-assign = { identchain ~ "=" ~ expr }
+assign = { identchain ~ ("[" ~ expr ~ "]")? ~ "=" ~ expr }
 
 vardecl = { "var" ~ ident ~ "=" ~ expr}
 

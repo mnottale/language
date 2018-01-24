@@ -33,7 +33,7 @@ use value::EValue;
 use value::box_f64;
 use value::unbox_f64;
 
-use value::{T_INT, T_PRI};
+use value::{T_INT, T_PRI, T_ARR};
 
 mod callable;
 use callable::Callable;
@@ -149,7 +149,10 @@ enum Expression {
 enum Statement {
   GlobalAssignment{target: String, rhs: Box<Expression>},
   StackAssignment{target: i32, rhs: Box<Expression>},
+  GlobalIndexAssignment{target: String, rhs: Box<Expression>, index: Box<Expression>},
+  StackIndexAssignment{target: i32, rhs: Box<Expression>, index: Box<Expression>},
   ObjAssignment{target: Box<Expression>, slot: String, rhs: Box<Expression>, cacheClass: *const Class, cacheIndex: i32},
+  ObjIndexAssignment{target: Box<Expression>, slot: String, rhs: Box<Expression>, index: Box<Expression>, cacheClass: *const Class, cacheIndex: i32},
   If{cond: Box<Expression>, block: Box<Block>, blockelse: Option<Box<Block>>},
   While{cond: Box<Expression>, block: Box<Block>},
   Block(Box<Block>),
@@ -255,7 +258,7 @@ fn parse_binary(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>,
   let op = pairs.next().unwrap();
   let expr = pairs.next().unwrap();
   let v1 = match noie.as_rule() {
-    Rule::number => Expression::Constant(noie.into_span().as_str().to_string().parse::<i32>().unwrap()),
+    Rule::number => Expression::Constantf(noie.into_span().as_str().to_string().parse::<f64>().unwrap()),
     Rule::identchain => parse_identchain(noie.into_inner(), ctx),
     Rule::expr => parse_expr(noie.into_inner(), ctx),
     _ => unreachable!(),
@@ -425,12 +428,27 @@ fn parse_if(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, ctx
 fn parse_assign(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, ctx: &mut ParseContext) -> Statement {
   let ident = parse_identchain(pairs.next().unwrap().into_inner(), ctx);
   let expr = pairs.next().unwrap();
-  let rrhs = parse_expr(expr.into_inner(), ctx);
-  match ident {
-    Expression::GlobalVariable(v) => Statement::GlobalAssignment{target: v, rhs: Box::new(rrhs)},
-    Expression::StackVariable(v) => Statement::StackAssignment{target: v, rhs: Box::new(rrhs)},
-    Expression::Dot{lhs, rhs, cacheClass, cacheIndex} => Statement::ObjAssignment{target: lhs, slot: rhs, rhs: Box::new(rrhs), cacheClass: 0 as *const Class, cacheIndex: 0},
-    _ => {unreachable!()},
+  match pairs.next() {
+    None => {
+      let rrhs = parse_expr(expr.into_inner(), ctx);
+      match ident {
+        Expression::GlobalVariable(v) => Statement::GlobalAssignment{target: v, rhs: Box::new(rrhs)},
+        Expression::StackVariable(v) => Statement::StackAssignment{target: v, rhs: Box::new(rrhs)},
+        Expression::Dot{lhs, rhs, cacheClass, cacheIndex} => Statement::ObjAssignment{target: lhs, slot: rhs, rhs: Box::new(rrhs), cacheClass: 0 as *const Class, cacheIndex: 0},
+        _ => {unreachable!()},
+        }
+      },
+    Some(e) => {
+      let index = parse_expr(expr.into_inner(), ctx);
+      let rrhs = parse_expr(e.into_inner(), ctx);   
+      match ident {
+        Expression::GlobalVariable(v) => Statement::GlobalIndexAssignment{target: v, rhs: Box::new(rrhs), index: Box::new(index)},
+        Expression::StackVariable(v) => Statement::StackIndexAssignment{target: v, rhs: Box::new(rrhs), index: Box::new(index)},
+        Expression::Dot{lhs, rhs, cacheClass, cacheIndex} => Statement::ObjIndexAssignment{target: lhs, slot: rhs, rhs: Box::new(rrhs), index: Box::new(index), cacheClass: 0 as *const Class, cacheIndex: 0},
+        _ => {unreachable!()},
+
+      }
+    }
   }
 }
 
@@ -515,20 +533,46 @@ fn process_toplevel(pair: pest::iterators::Pair<Rule, pest::inputs::StrInput>, m
   }
 }
 
+fn assign_index(v: &mut Value, idx: &Value, val: Value) -> Value {
+	if idx.vtype() != T_INT {
+		return Value::from_err("Index is not an int".to_string());
+	}
+	if v.vtype() != T_ARR {
+		return Value::from_err("Variable is not an array".to_string());
+	}
+	let arr = v.as_vec();
+	if (arr.len() as i32) <= idx.as_int() || idx.as_int() < 0 {
+		return Value::from_err("Invalid index".to_string());
+	}
+	arr[idx.as_int() as usize] = val.clone();
+	val
+}
+
 fn exec_statement(s: &Statement, ctx: &mut ExecContext) -> Value {
   match *s {
     Statement::GlobalAssignment{ref target, ref rhs} => {
       let val = exec_expr(&*rhs, ctx);
-      //println!("assigning {} to {}", val, target);
       let mut v = variables.lock().unwrap();
       let entry = v.entry(target.clone()).or_insert(Value::from_int(0));
       *entry = val;
       (*entry).clone()
     },
+    Statement::GlobalIndexAssignment{ref target, ref rhs, ref index} => {
+    	let val = exec_expr(&*rhs, ctx);
+    	let idx = exec_expr(&*index, ctx);
+      let mut v = variables.lock().unwrap();
+      let entry = v.entry(target.clone()).or_insert(Value::from_int(0));
+      assign_index(&mut *entry, &idx, val)
+    },
     Statement::StackAssignment{target, ref rhs} => {
       let val = exec_expr(&*rhs, ctx);
       ctx.stack[target as usize] = val;
       ctx.stack[target as usize].clone()
+    }
+    Statement::StackIndexAssignment{target, ref rhs, ref index} => {
+    	let val = exec_expr(&*rhs, ctx);
+    	let idx = exec_expr(&*index, ctx);
+    	assign_index(&mut ctx.stack[target as usize], &idx, val)
     }
     Statement::Expression(ref e) => {
       exec_expr(&*e, ctx)
@@ -580,7 +624,29 @@ fn exec_statement(s: &Statement, ctx: &mut ExecContext) -> Value {
         },
         _ => Value::from_err("assignment to field of non-object".to_string()),
       }
-    }
+    },
+    Statement::ObjIndexAssignment{ref target, ref slot, ref rhs, ref index, ref cacheClass, ref cacheIndex} => {
+      let tgt = exec_expr(&*target, ctx);
+      let v = exec_expr(&*rhs, ctx);
+      let aidx = exec_expr(&*index, ctx);
+      match tgt.evalue() {
+        EValue::Obj(o) => {
+          if o.class as *const Class == *cacheClass {
+          	assign_index(&mut o.fields[*cacheIndex as usize], &aidx, v)
+          } else {
+            match o.class.fields.get(slot) {
+              Some(idx) => {
+                *bearclaw(cacheClass) = o.class;
+                *bearclaw(cacheIndex) = *idx;
+                assign_index(&mut o.fields[*cacheIndex as usize], &aidx, v)
+              },
+              None => Value::from_err(String::new() + "no such field: " + &slot),
+            }
+          }
+        },
+        _ => Value::from_err("assignment to field of non-object".to_string()),
+      }
+    },
   }
 }
 
