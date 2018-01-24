@@ -7,8 +7,9 @@ ident = @{ "%"? ~ alpha ~ (alpha | digit)* }
 
 parametric = { "$" ~ ident}
 
-exprlist = { expr ? ~ ("," ~ expr)* } 
-identlist = {ident ? ~ ("," ~ ident)*}
+exprlist = { expr ? ~ ("," ~ expr)* }
+catchall = { "*" ~ ident}
+identlist = { catchall | (ident ? ~ ("," ~ ident)* ~ ("," ~ catchall)?) }
 assign = { identchain ~ ("[" ~ expr ~ "]")? ~ "=" ~ expr }
 
 vardecl = { "var" ~ ident ~ "=" ~ expr}

@@ -172,6 +172,7 @@ pub struct Class {
 #[derive(Clone)]
 pub struct Function {
   formals: Vec<String>,
+  catchall: Option<String>,
   code: Box<Block>,
   stack: Box<Stack>,
   closureBuild: Vec<i32>, // parent stack indexes
@@ -267,12 +268,17 @@ fn parse_exprlist(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput
   res
 }
 
-fn parse_identlist(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, _ctx: &mut ParseContext) -> IdentList {
+fn parse_identlist(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, _ctx: &mut ParseContext) -> (IdentList, Option<String>) {
   let mut res = IdentList::new();
+  let mut catchall = None;
   for p in pairs {
-    res.push(p.into_span().as_str().to_string())
+    match p.as_rule() {
+      Rule::ident => res.push(p.into_span().as_str().to_string()),
+      Rule::catchall => catchall = Some(p.into_inner().next().unwrap().into_span().as_str().to_string()),
+      _ => unreachable!(),
+    }
   }
-  res
+  (res, catchall)
 }
 
 fn parse_identchain(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, ctx: &mut ParseContext) -> Expression {
@@ -454,10 +460,17 @@ fn parse_block(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, 
 
 fn parse_lambda(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, ctx: &mut ParseContext) -> Expression {
   let pformals = pairs.next().unwrap();
-  let formals = parse_identlist(pformals.into_inner(), ctx);
+  let (formals, catchall) = parse_identlist(pformals.into_inner(), ctx);
   let mut stack = Stack::new();
   for i in 0..formals.len() {
     stack.insert(formals[i].clone(), i as i32);
+  }
+  match catchall {
+    Some(ref v) => {
+      let l = stack.len();
+      stack.insert(v.clone(), l as i32);
+    }
+    None => {}
   }
   let body = pairs.next().unwrap();
   let mut newctx = ParseContext{stack: Some(Box::new(stack)), parentStack: ctx.stack.clone(), close: HashMap::new(), expressions: HashMap::new(), statements: HashMap::new(), identifiers: HashMap::new()};
@@ -470,6 +483,7 @@ fn parse_lambda(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>,
   }
   Expression::Lambda(Box::new(Function{
       formals: formals,
+      catchall: catchall,
       code: Box::new(block),
       stack: newctx.stack.unwrap(),
       closureBuild: closureBuild,
@@ -495,16 +509,24 @@ fn process_toplevel(pair: pest::iterators::Pair<Rule, pest::inputs::StrInput>, m
       let rname = comps.next().unwrap();
       let name = rname.into_span().as_str().to_string();
       let pformals = comps.next().unwrap();
-      let formals = parse_identlist(pformals.into_inner(), &mut ctx);
+      let (formals, catchall) = parse_identlist(pformals.into_inner(), &mut ctx);
       let mut stack = Stack::new();
       for i in 0..formals.len() {
         stack.insert(formals[i].clone(), i as i32);
+      }
+      match catchall {
+        Some(ref v) => {
+          let l = stack.len();
+          stack.insert(v.clone(), l as i32);
+        }
+        None => {}
       }
       ctx.stack = Some(Box::new(stack));
       let body = comps.next().unwrap();
       let mut block = parse_block(body.into_inner(), &mut ctx);
       let vf = Value::from_fun(Function{
         formals: formals,
+        catchall: catchall,
         code: Box::new(block),
         stack: ctx.stack.unwrap(),
         closure: Vec::new(),
@@ -679,6 +701,40 @@ fn exec_op_i (v1: i32, v2: i32, op: &str) -> Value {
   }
 }
 
+fn exec_funcall(fun: &Function, args: Vec<Value>, ctx: &mut ExecContext) -> Value{
+  //let &mut fun = f.as_fun();
+  if fun.catchall.is_none() {
+    if fun.formals.len() != args.len() {
+      return Value::from_err("wrong number of arguments".to_string());
+    }
+    let mut fctx = ExecContext{stack: args, functions: Arc::clone(&ctx.functions)};
+    fctx.stack.resize(fun.stack.len(), Value::from_int(0));
+    for i in 0..fun.closure.len() {
+      fctx.stack[fun.closurePut[i] as usize] = fun.closure[i].clone();
+    }
+    exec_block(&*fun.code, &mut fctx)
+  } else {
+    if fun.formals.len() > args.len() {
+      return Value::from_err("wrong number of arguments".to_string());
+    }
+    let mut fctx = ExecContext{stack: Vec::new(), functions: Arc::clone(&ctx.functions)};
+    fctx.stack.resize(fun.stack.len(), Value::from_int(0));
+    for i in 0..fun.formals.len() {
+      fctx.stack[i] = args[i].clone();
+    }
+    let mut ca = Vec::new();
+    for i in fun.formals.len()..args.len() {
+      ca.push(args[i].clone());
+    }
+    // catchall is always right after formals in stack
+    fctx.stack[fun.formals.len()] = Value::from_vec(ca);
+    for i in 0..fun.closure.len() {
+      fctx.stack[fun.closurePut[i] as usize] = fun.closure[i].clone();
+    }
+    exec_block(&*fun.code, &mut fctx)
+  }
+}
+
 fn exec_expr(e: &Expression, ctx: &mut ExecContext) -> Value {
   match *e {
     Expression::Constant(c) => Value::from_int(c),
@@ -737,19 +793,11 @@ fn exec_expr(e: &Expression, ctx: &mut ExecContext) -> Value {
       //println!("Entering function {:?}", f);
       match f.evalue() {
         EValue::Fun(ref fun) => {
-          if fun.formals.len() != args.len() {
-            Value::from_err("wrong number of arguments".to_string())
-          } else {
-            let mut fctx = ExecContext{stack: Vec::new(), functions: Arc::clone(&ctx.functions)};
-            fctx.stack.resize(fun.stack.len(), Value::from_int(0));
-            for i in 0..args.len() {
-              fctx.stack[i] = exec_expr(&*args[i], ctx);
-            }
-            for i in 0..fun.closure.len() {
-              fctx.stack[fun.closurePut[i] as usize] = fun.closure[i].clone();
-            }
-            exec_block(&*fun.code, &mut fctx)
+          let mut vargs = Vec::new();
+          for i in 0..args.len() {
+            vargs.push(exec_expr(&*args[i], ctx));
           }
+          exec_funcall(fun, vargs, ctx)
         },
         EValue::Pri(ref c) => {
           let mut a = Vec::new();
@@ -769,23 +817,14 @@ fn exec_expr(e: &Expression, ctx: &mut ExecContext) -> Value {
             }
             v[0].as_pri().call(a)
           } else {
-            let fun = v[0].as_fun();
-            if fun.formals.len() != args.len() + v.len()-1 {
-              Value::from_err(format!("wrong number of arguments: {}, expected {}", args.len()+v.len()-1, fun.formals.len()).to_string())
-            } else {
-              let mut fctx = ExecContext{stack: Vec::new(), functions: Arc::clone(&ctx.functions)};
-              fctx.stack.resize(fun.stack.len(), Value::from_int(0));
-              for i in 1..v.len() {
-                fctx.stack[i-1] = v[i].clone();
-              }
-              for i in 0..args.len() {
-                fctx.stack[i+v.len()-1] = exec_expr(&*args[i], ctx);
-              }
-              for i in 0..fun.closure.len() {
-                fctx.stack[fun.closurePut[i] as usize] = fun.closure[i].clone();
-              }
-              exec_block(&*fun.code, &mut fctx)
+            let mut vargs = Vec::new();
+            for i in 1..v.len() {
+              vargs.push(v[i].clone());
             }
+            for i in 0..args.len() {
+              vargs.push(exec_expr(&*args[i], ctx));
+            }
+            exec_funcall(v[0].as_fun(), vargs, ctx)
           }
         }
         _ => Value::from_err("call of not a function".to_string()),
@@ -820,7 +859,12 @@ fn exec_expr(e: &Expression, ctx: &mut ExecContext) -> Value {
             }
             // try functions
             match o.class.funcs.get(rhs) {
-              Some(ref f) => Value::from_vec(vec![(*f).clone(), val.clone()]),
+              Some(ref f) => return Value::from_vec(vec![(*f).clone(), val.clone()]),
+              None => {}
+            }
+            // try fallback
+            match o.class.funcs.get(&"fallback".to_string()) {
+              Some(ref f) => return Value::from_vec(vec![(*f).clone(), val.clone(), Value::from_str(rhs.clone())]),
               None => Value::from_err(String::new() + "missing field: " + rhs),
             }
           }
