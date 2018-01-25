@@ -8,6 +8,7 @@ use value::{Value,EValue};
 use callable::Callable;
 use callable::Convertible;
 use callable::Boxable;
+use python::load_python;
 
 
 fn len(v: Value) -> i32 {
@@ -82,4 +83,5 @@ pub fn load_stdlib(fs: &mut Functions, clss: &mut Classes) {
   cPoint.funcs.insert("translate".to_string(), Value::from_pri(Box::new(Point::translate as fn(&mut Point, i32, i32)->i32)));
   cPoint.funcs.insert("l1".to_string(), Value::from_pri(Box::new(Point::l1 as fn(&mut Point)->i32)));
   clss.insert("Point".to_string(), Box::new(cPoint));
+  load_python(fs, clss);
 }

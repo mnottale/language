@@ -8,6 +8,7 @@ pest = "^1.0.0-beta"
 pest_derive = "^1.0.0-beta"
 lazy_static = "1.0.0"
 maplit = "1.0.1"
+cpython = "0.1.0"
 
 [[bin]]
 name = "urbi4"

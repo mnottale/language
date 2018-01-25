@@ -1,6 +1,8 @@
 //#![feature(underscore_lifetimes)]
 
 
+extern crate cpython;
+
 #[macro_use] extern crate maplit;
 
 #[macro_use]
@@ -39,6 +41,9 @@ use value::{T_INT, T_PRI, T_ARR};
 mod callable;
 use callable::Callable;
 use callable::Convertible;
+
+mod python;
+use python::test_python;
 
 mod libstdlib;
 use libstdlib::load_stdlib;
@@ -919,7 +924,8 @@ fn test_value() {
 use std::time::Instant;
 
 fn main() {
-  test_value();
+  //test_value();
+  test_python();
   let mut state : HashMap<String, i32> = HashMap::new();
   let mut functions = Arc::new(Functions::new());
   load_stdlib(&mut variables.lock().unwrap(), &mut *classes.lock().unwrap());
