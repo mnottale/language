@@ -140,6 +140,7 @@ type IdentList = Vec<String>;
 enum Expression {
   Constant(i32),
   Constantf(f64),
+  Constants(String),
   GlobalVariable(String),
   StackVariable(i32),
   Array(ExprList),
@@ -255,6 +256,10 @@ fn parse_binary(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>,
   let op = pairs.next().unwrap();
   let expr = pairs.next().unwrap();
   let v1 = match noie.as_rule() {
+    Rule::string => {
+      let val = noie.into_span().as_str().to_string();
+      Expression::Constants(val[1..val.len()-1].to_string())
+    },
     Rule::number => Expression::Constantf(noie.into_span().as_str().to_string().parse::<f64>().unwrap()),
     Rule::identchain => parse_identchain(noie.into_inner(), ctx),
     Rule::expr => parse_expr(noie.into_inner(), ctx),
@@ -307,6 +312,10 @@ fn parse_expr(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>, c
         } else {
           Expression::Constantf(val)
         }
+      },
+      Rule::string => {
+        let val = content.into_span().as_str().to_string();
+        Expression::Constants(val[1..val.len()-1].to_string())
       },
       Rule::ident =>  parse_variable(content.into_span().as_str().to_string(), ctx),
       Rule::identchain => parse_identchain(content.into_inner(), ctx),
@@ -740,10 +749,12 @@ fn exec_funcall(fun: &Function, args: Vec<Value>, ctx: &mut ExecContext) -> Valu
   }
 }
 
+
 fn exec_expr(e: &Expression, ctx: &mut ExecContext) -> Value {
   match *e {
     Expression::Constant(c) => Value::from_int(c),
     Expression::Constantf(c) => Value::from_flt(c),
+    Expression::Constants(ref s) => Value::from_str(s.clone()),
     Expression::GlobalVariable(ref name) => {
       match variables.lock().unwrap().get(name) {
         Some(v) => v.clone(),
