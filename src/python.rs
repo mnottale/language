@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use cpython::{Python, PyObject, PyList, PythonObject, PyDict, PyResult, PyModule, ToPyObject};
-use callable::{Boxable, Convertible};
+use cpython::{ObjectProtocol, Python, PyObject, PyList, PyTuple, PythonObject, PyDict, PyResult, PyModule, ToPyObject};
+use callable::{Boxable, Convertible, Callable};
 use value::{Value, EValue};
 use get_class;
 use Object;
@@ -82,9 +82,9 @@ impl Convertible for PyObject {
     pyobject_to_value(self, &python)
   }
   fn from_value(v: &Value) -> PyObject {
-    let pl = "foo".to_py_object(Python::acquire_gil().python());
-    let po: PyObject = pl.into_object();
-    po
+    let gil = Python::acquire_gil();
+    let python = gil.python();
+    value_to_pyobject(v, &python)
   }
 }
 
@@ -94,6 +94,41 @@ fn pymodule_get(me: &mut PyModule, attr: String) -> PyObject {
   me.get(python, attr.as_str()).unwrap()
 }
 
+struct PyCall
+{
+}
+
+impl Callable for PyCall {
+  fn call(&self, args: Vec<Value>) -> Value {
+    // self, slot, args
+    let gil = Python::acquire_gil();
+    let python = gil.python();
+    let target: PyObject = Convertible::from_value(&args[0]);
+    let mut pargs = Vec::<PyObject>::new();
+    for i in 2..args.len() {
+      pargs.push(Convertible::from_value(&args[i]));
+    }
+    target.call_method(python, args[1].as_str().as_str(), PyTuple::new(python, pargs.as_slice()), None).unwrap().to_value()
+  }
+}
+
+struct PyModCall
+{
+}
+
+impl Callable for PyModCall {
+  fn call(&self, args: Vec<Value>) -> Value {
+    // self, slot, args
+    let gil = Python::acquire_gil();
+    let python = gil.python();
+    let target: &mut PyModule = Convertible::from_value_refmut(&args[0]);
+    let mut pargs = Vec::<PyObject>::new();
+    for i in 2..args.len() {
+      pargs.push(Convertible::from_value(&args[i]));
+    }
+    target.call(python, args[1].as_str().as_str(), PyTuple::new(python, pargs.as_slice()), None).unwrap().to_value()
+  }
+}
 
 use Functions;
 use Classes;
@@ -104,5 +139,11 @@ pub fn load_python(fs: &mut Functions, clss: &mut Classes) {
   fs.insert("pyeval".to_string(), Value::from_pri(Box::new(eval as fn(String) -> PyObject)));
   let mut cModule = Class {name: "PyModule".to_string(), fields: hashmap!{"box".to_string() => 0}, funcs: HashMap::new()};
   cModule.funcs.insert("get".to_string(), Value::from_pri(Box::new(pymodule_get as fn(&mut PyModule, String)->PyObject)));
+  cModule.funcs.insert("fallback".to_string(), Value::from_pri(Box::new(PyModCall{})));
+ 
   clss.insert("PyModule".to_string(), Box::new(cModule));
+  
+  let mut cObject = Class {name: "PyObject".to_string(), fields: hashmap!{"box".to_string() => 0}, funcs: HashMap::new()};
+  cObject.funcs.insert("fallback".to_string(), Value::from_pri(Box::new(PyCall{})));
+  clss.insert("PyObject".to_string(), Box::new(cObject));
 }
