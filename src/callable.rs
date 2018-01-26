@@ -117,6 +117,9 @@ impl Convertible for Vec<Value> {
       Vec::new()
     }
   }
+  fn from_value_refmut(v: &Value) -> &'static mut Vec<Value> {
+    v.as_vec()
+  }
 }
 
 impl Convertible for Option<Value> {
@@ -141,15 +144,6 @@ impl<'a> Convertible for &'a mut Vec<Value> {
   }
 }
 */
-
-impl Convertible for &'static mut Vec<Value> {
-  fn to_value(self) -> Value {
-    Value::from_vec((*self).clone())
-  }
-  fn from_value(v: &Value) -> &'static mut Vec<Value> {
-    v.as_vec()
-  }
-}
 
 pub trait Callable {
   fn call(&self, args: Vec<Value>) -> Value;
