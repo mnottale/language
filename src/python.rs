@@ -135,7 +135,15 @@ use Classes;
 use Class;
 
 pub fn load_python(fs: &mut Functions, clss: &mut Classes) {
-  fs.insert("pymodule".to_string(), Value::from_pri(Box::new(get_module as fn(Value, String)->PyModule)));
+  let mut cModules = Class {name: "PyModules".to_string(), fields: HashMap::new(), funcs: HashMap::new()};
+  cModules.funcs.insert("fallback".to_string(), Value::from_pri(Box::new(get_module as fn(Value, String)->PyModule)));
+  // we cannot call get_class() to construct the object as it would deadlock
+  let bcm = Box::new(cModules);
+  let cptr : *const Class = &*bcm;
+  let cref: &'static Class = unsafe { &*cptr};
+  clss.insert("PyModules".to_string(), bcm);
+  fs.insert("pymodule".to_string(), Value::from_obj(Object{class: cref, fields: Vec::new()}));
+  
   fs.insert("pyeval".to_string(), Value::from_pri(Box::new(eval as fn(String) -> PyObject)));
   let mut cModule = Class {name: "PyModule".to_string(), fields: hashmap!{"box".to_string() => 0}, funcs: HashMap::new()};
   cModule.funcs.insert("get".to_string(), Value::from_pri(Box::new(pymodule_get as fn(&mut PyModule, String)->PyObject)));
