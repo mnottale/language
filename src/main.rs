@@ -260,7 +260,14 @@ fn parse_binary(mut pairs: pest::iterators::Pairs<Rule, pest::inputs::StrInput>,
       let val = noie.into_span().as_str().to_string();
       Expression::Constants(val[1..val.len()-1].to_string())
     },
-    Rule::number => Expression::Constantf(noie.into_span().as_str().to_string().parse::<f64>().unwrap()),
+    Rule::number =>  {
+        let val = noie.into_span().as_str().to_string().parse::<f64>().unwrap();
+        if val == val.floor() {
+          Expression::Constant(val as i32)
+        } else {
+          Expression::Constantf(val)
+        }
+      },
     Rule::identchain => parse_identchain(noie.into_inner(), ctx),
     Rule::expr => parse_expr(noie.into_inner(), ctx),
     _ => unreachable!(),
@@ -970,6 +977,7 @@ fn main() {
 }
 
 
+
 /*
 BASIC FIBO
 func fibo(x) { if x > 2 { (fibo(x-1))+(fibo(x-2));} else {x;};}
@@ -983,5 +991,14 @@ base 6.1s
 cache index read: 5.1
 cache index write: 5.1  <--dummy we don't use those but object initializer
 python equivalent: 9s
+
+
+BENCH binary-trees
+class Tree{l;r;}
+makeTree = func(d) { if d > 0 { Tree{makeTree(d-1),makeTree(d-1)};} else { Tree{0, 0};};}
+checksumTree = func(t) { if t.l == 0 { 1;} else { (1 + (checksumTree(t.l)) + checksumTree(t.r));};}
+step = func(d, c) { var res = 0; forint i in c { res = res + checksumTree(makeTree(d));};res;}
+do = func(maxdepth) { for var i=4;i < maxdepth; i = i+2 { var cnt = 1 << ((maxdepth + 4) - i); var ck = step(i, cnt); print(i);print(cnt); print(ck); print("--");};}
+bench = func(maxdepth) { print(checksumTree(makeTree(maxdepth+1))); var lltree = makeTree(maxdepth); do(maxdepth);print(checksumTree(lltree));}
 
 */

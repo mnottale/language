@@ -238,7 +238,7 @@ impl Value {
       EValue::Str(s) => s.len() != 0,
       EValue::Vec(v) => v.len() != 0,
       EValue::Obj(_o) => true,
-      EValue::Err(_e) => true,
+      EValue::Err(_e) => false,
       EValue::Fun(_f) => true,
       EValue::Pri(_p) => true,
       EValue::Box(_p) => true,
